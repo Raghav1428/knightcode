@@ -1,0 +1,23 @@
+{
+  "name": "@nightcode/cli",
+  "module": "src/index.tsx",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun run --watch src/index.tsx"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/react": "^19.2.6"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@repo/eslint-config": "*",
+    "@repo/typescript-config": "workspace:*",
+    "@opentui/core": "^0.2.10",
+    "@opentui/react": "^0.2.10",
+    "react": "^19.2.6"
+  }
+}
