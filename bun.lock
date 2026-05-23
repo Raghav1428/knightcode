@@ -75,6 +75,7 @@
       "dependencies": {
         "@ai-sdk/anthropic": "^3.0.68",
         "@ai-sdk/openai": "^3.0.52",
+        "@ai-sdk/provider-utils": "^4.0.27",
         "@hono/zod-validator": "^0.8.0",
         "@knightcode/database": "workspace:*",
         "@knightcode/shared": "workspace:*",

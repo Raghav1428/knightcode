@@ -16,7 +16,7 @@ export function StatusBar() {
       <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>
         ›
       </text>
-      <text>{model}</text>
+      <text>{model.replace(/:free$/, "")}</text>
     </box>
   );
 }
