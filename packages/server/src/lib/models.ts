@@ -1,12 +1,14 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { openai } from "@ai-sdk/openai";
-import { createOpenRouter } from "@openrouter/ai-sdk-provider";
+import type { ProviderOptions } from "@ai-sdk/provider-utils";
 import {
   findSupportedChatModel,
   type SupportedChatModel,
   type SupportedChatModelId,
   type SupportedProvider,
+  type ReasoningEffortLevel,
 } from "@knightcode/shared";
+import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { LanguageModel } from "ai";
 
 const openrouter = createOpenRouter({
@@ -30,46 +32,132 @@ export type ResolvedModel = {
   model: LanguageModel;
   provider: SupportedProvider;
   modelId: SupportedChatModelId;
+  providerOptions?: ProviderOptions;
 };
+
+function buildProviderOptions(
+  model: SupportedChatModel,
+  reasoningEffort: ReasoningEffortLevel = "medium",
+): ProviderOptions | undefined {
+  if (!model.supportsThinking) {
+    return undefined;
+  }
+
+  if (reasoningEffort === "none") {
+    if (model.provider === "openai") {
+      return {
+        openai: {
+          reasoningEffort: "none",
+        },
+      };
+    }
+    if (model.provider === "openrouter") {
+      return {
+        openrouter: {
+          reasoning: {
+            effort: "none",
+          },
+        },
+      };
+    }
+    return undefined;
+  }
+
+  if (model.provider === "anthropic") {
+    let budget = 4096;
+    if (reasoningEffort === "low") budget = 1024;
+    else if (reasoningEffort === "high") budget = 8192;
+    else if (reasoningEffort === "max") budget = 16384;
+
+    return {
+      anthropic: {
+        thinking: {
+          type: "enabled",
+          budgetTokens: budget,
+        },
+      },
+    };
+  }
+
+  if (model.provider === "openai") {
+    const effort = reasoningEffort === "max" ? "high" : reasoningEffort;
+    return {
+      openai: {
+        reasoningEffort: effort,
+      },
+    };
+  }
+
+  if (model.provider === "openrouter") {
+    const effort = reasoningEffort === "max" ? "xhigh" : reasoningEffort;
+    return {
+      openrouter: {
+        reasoning: {
+          effort,
+        },
+      },
+    };
+  }
+
+  return undefined;
+}
+
+function resolveAnthropicModel(
+  modelId: AnthropicModelId,
+  reasoningEffort?: ReasoningEffortLevel,
+): ResolvedModel {
+  const modelDef = findSupportedChatModel(modelId)!;
+  return {
+    model: anthropic(modelId),
+    provider: "anthropic",
+    modelId,
+    providerOptions: buildProviderOptions(modelDef, reasoningEffort),
+  };
+}
+
+function resolveOpenAIModel(
+  modelId: OpenAIModelId,
+  reasoningEffort?: ReasoningEffortLevel,
+): ResolvedModel {
+  const modelDef = findSupportedChatModel(modelId)!;
+  return {
+    model: openai(modelId),
+    provider: "openai",
+    modelId,
+    providerOptions: buildProviderOptions(modelDef, reasoningEffort),
+  };
+}
+
+function resolveOpenRouterModel(
+  modelId: OpenRouterModelId,
+  reasoningEffort?: ReasoningEffortLevel,
+): ResolvedModel {
+  const modelDef = findSupportedChatModel(modelId)!;
+  return {
+    model: openrouter.chat(modelId),
+    provider: "openrouter",
+    modelId,
+    providerOptions: buildProviderOptions(modelDef, reasoningEffort),
+  };
+}
 
 function assertUnsupportedProvider(provider: never): never {
   throw new Error(`Unsupported provider: ${provider}`);
 }
 
-function resolveAnthropicModel(modelId: AnthropicModelId): ResolvedModel {
-  return {
-    model: anthropic(modelId),
-    provider: "anthropic",
-    modelId,
-  };
-}
-
-function resolveOpenAIModel(modelId: OpenAIModelId): ResolvedModel {
-  return {
-    model: openai(modelId),
-    provider: "openai",
-    modelId,
-  };
-}
-
-function resolveOpenRouterModel(modelId: OpenRouterModelId): ResolvedModel {
-  return {
-    model: openrouter.chat(modelId),
-    provider: "openrouter",
-    modelId,
-  };
-}
-
-function resolveSupportedChatModel(model: SupportedChatModel): ResolvedModel {
+function resolveSupportedChatModel(
+  model: SupportedChatModel,
+  reasoningEffort?: ReasoningEffortLevel,
+): ResolvedModel {
   const provider = model.provider;
 
   switch (provider) {
     case "anthropic":
-      return resolveAnthropicModel(model.id);
+      return resolveAnthropicModel(model.id, reasoningEffort);
     case "openai":
-      return resolveOpenAIModel(model.id);
+      return resolveOpenAIModel(model.id, reasoningEffort);
     case "openrouter":
-      return resolveOpenRouterModel(model.id);
+      return resolveOpenRouterModel(model.id, reasoningEffort);
     default:
       return assertUnsupportedProvider(provider);
   }
@@ -81,11 +169,14 @@ export function isSupportedChatModel(
   return findSupportedChatModel(modelId) != null;
 }
 
-export function resolveChatModel(modelId: string): ResolvedModel {
+export function resolveChatModel(
+  modelId: string,
+  reasoningEffort?: ReasoningEffortLevel,
+): ResolvedModel {
   const model = findSupportedChatModel(modelId);
   if (!model) {
     throw new Error(`Unsupported model: ${modelId}`);
   }
 
-  return resolveSupportedChatModel(model);
+  return resolveSupportedChatModel(model, reasoningEffort);
 }

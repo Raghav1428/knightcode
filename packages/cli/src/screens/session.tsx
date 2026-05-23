@@ -1,6 +1,6 @@
 import { MessageStatus } from "@knightcode/database/enums";
 import {
-  DEFAULT_CHAT_MODEL_ID,
+  messagePartsSchema,
   type SupportedChatModelId,
 } from "@knightcode/shared";
 import { useKeyboard } from "@opentui/react";
@@ -11,11 +11,12 @@ import { useLocation, useNavigate, useParams } from "react-router";
 import { z } from "zod";
 import { BotMessage, ErrorMessage, UserMessage } from "../components/messages";
 import { SessionShell } from "../components/session-shell";
-import type { Message } from "../hooks/use-chat";
+import type { ClientMessagePart, Message } from "../hooks/use-chat";
 import { useChat } from "../hooks/use-chat";
 import { apiClient } from "../lib/api-client";
 import { getErrorMessage } from "../lib/http-errors";
 import { useKeyboardLayer } from "../providers/keyboard-layer";
+import { usePromptConfig } from "../providers/prompt-config";
 import { useToast } from "../providers/toast";
 
 type SessionData = InferResponseType<
@@ -35,11 +36,10 @@ const sessionLocationSchema = z.object({
         mode: z.enum(["BUILD", "PLAN"]),
         status: z.enum(["COMPLETE", "INTERRUPTED"]),
         duration: z.number().nullable().optional(),
-      })
+      }),
     ),
   }),
 }) as unknown as z.ZodType<{ session: SessionData }>;
-
 
 function mapDbMessages(dbMessages: SessionData["messages"]): Message[] {
   return dbMessages.map((m): Message => {
@@ -57,13 +57,27 @@ function mapDbMessages(dbMessages: SessionData["messages"]): Message[] {
       };
     }
 
+    const parsedParts =
+      m.parts == null ? null : messagePartsSchema.safeParse(m.parts);
+    const normalized = parsedParts?.success
+      ? parsedParts.data.map((p) =>
+          p.type === "tool-call" ? { ...p, status: "done" as const } : p,
+        )
+      : null;
+    const parts: ClientMessagePart[] =
+      normalized && normalized.length > 0
+        ? normalized
+        : m.content
+          ? [{ type: "text", text: m.content }]
+          : [];
+
     return {
       id: m.id,
       role: "assistant",
       content: m.content,
       model: m.model as SupportedChatModelId,
       mode: m.mode,
-      parts: [{ type: "text", text: m.content }],
+      parts,
       ...(m.duration != null ? { duration: prettyMs(m.duration * 1000) } : {}),
       interrupted: m.status === MessageStatus.INTERRUPTED,
     };
@@ -72,7 +86,7 @@ function mapDbMessages(dbMessages: SessionData["messages"]): Message[] {
 
 function ChatMessage({ msg }: { msg: Message }) {
   if (msg.role === "user") {
-    return <UserMessage message={msg.content} />;
+    return <UserMessage message={msg.content} mode={msg.mode} />;
   }
 
   if (msg.role === "error") {
@@ -94,6 +108,7 @@ function ChatMessage({ msg }: { msg: Message }) {
 function SessionChat({ session }: { session: SessionData }) {
   const [initialMessages] = useState(() => mapDbMessages(session.messages));
   const { isTopLayer } = useKeyboardLayer();
+  const { mode, model, reasoningEffort } = usePromptConfig();
   const { messages, streaming, submit, abort, interrupt } = useChat(
     session.id,
     initialMessages,
@@ -119,7 +134,7 @@ function SessionChat({ session }: { session: SessionData }) {
   return (
     <SessionShell
       onSubmit={(text) =>
-        submit({ userText: text, mode: "BUILD", model: DEFAULT_CHAT_MODEL_ID })
+        submit({ userText: text, mode, model, reasoningEffort })
       }
       loading={streaming.status === "streaming"}
       interruptible={streaming.status === "streaming"}
@@ -151,6 +166,14 @@ export function Session() {
   }, [location.state]);
 
   const [session, setSession] = useState<SessionData | null>(prefetched);
+
+  const { setReasoningEffort } = usePromptConfig();
+
+  useEffect(() => {
+    if (session) {
+      setReasoningEffort((session.reasoningEffort as any) || "medium");
+    }
+  }, [session, setReasoningEffort]);
 
   useEffect(() => {
     // Skip fetch if session was passed via location state

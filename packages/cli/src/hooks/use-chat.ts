@@ -2,6 +2,7 @@ import type { Mode } from "@knightcode/database/enums";
 import {
   chatStreamEventSchema,
   type SupportedChatModelId,
+  type ReasoningEffortLevel,
 } from "@knightcode/shared";
 import { EventSourceParserStream } from "eventsource-parser/stream";
 import type { ClientResponse } from "hono/client";
@@ -10,7 +11,19 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { apiClient } from "../lib/api-client";
 import { getErrorMessage } from "../lib/http-errors";
 
-export type ClientMessagePart = { type: "text"; text: string };
+export type ClientToolCallPart = {
+  type: "tool-call";
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+  result?: string;
+  status: "calling" | "done";
+};
+
+export type ClientMessagePart =
+  | { type: "reasoning"; text: string }
+  | ClientToolCallPart
+  | { type: "text"; text: string };
 
 export type Message =
   | {
@@ -54,6 +67,7 @@ type SubmitParams = {
   userText: string;
   mode: Mode;
   model: SupportedChatModelId;
+  reasoningEffort?: ReasoningEffortLevel;
 };
 
 type RunStreamParams = {
@@ -183,6 +197,39 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
         }
 
         switch (event.type) {
+          case "reasoning-delta": {
+            const last = parts[parts.length - 1];
+            if (last && last.type === "reasoning") {
+              last.text += event.text;
+            } else {
+              parts.push({ type: "reasoning", text: event.text });
+            }
+            emitParts(activeStream.requestId, parts);
+            break;
+          }
+          case "tool-call": {
+            parts.push({
+              type: "tool-call",
+              id: event.toolCallId,
+              name: event.toolName,
+              args: event.args,
+              status: "calling",
+            });
+            emitParts(activeStream.requestId, parts);
+            break;
+          }
+          case "tool-result": {
+            const tc = parts.find(
+              (p): p is ClientToolCallPart =>
+                p.type === "tool-call" && p.id === event.toolCallId,
+            );
+            if (tc) {
+              tc.result = event.result;
+              tc.status = "done";
+            }
+            emitParts(activeStream.requestId, parts);
+            break;
+          }
           case "text-delta": {
             const last = parts[parts.length - 1];
             if (last && last.type === "text") {
@@ -316,7 +363,7 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
   }, [initialMessages, resume]);
 
   const submit = useCallback(
-    async ({ userText, mode, model }: SubmitParams) => {
+    async ({ userText, mode, model, reasoningEffort }: SubmitParams) => {
       // Show the partial answer before sending the next message
       stopActiveStream(true);
 
@@ -339,16 +386,20 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
               const res = await apiClient.chat[":sessionId"].$post(
                 {
                   param: { sessionId },
-                  json: { content: userText, mode, model },
+                  json: { content: userText, mode, model, reasoningEffort },
                 },
                 { init: { signal: controller.signal } },
               );
               if (!res.ok) {
-                updateMessages((prev) => prev.filter((m) => m.id !== userMessageId));
+                updateMessages((prev) =>
+                  prev.filter((m) => m.id !== userMessageId),
+                );
               }
               return res;
             } catch (err) {
-              updateMessages((prev) => prev.filter((m) => m.id !== userMessageId));
+              updateMessages((prev) =>
+                prev.filter((m) => m.id !== userMessageId),
+              );
               throw err;
             }
           },
