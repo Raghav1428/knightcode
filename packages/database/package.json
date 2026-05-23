@@ -9,7 +9,10 @@
     "./enums": "./src/enums.ts"
   },
   "scripts": {
-    "db:generate": "bunx prisma generate"
+    "db:generate": "bunx prisma generate",
+    "db:migrate:dev": "bunx prisma migrate dev",
+    "db:migrate:deploy": "bunx prisma migrate deploy",
+    "db:push": "bunx prisma db push"
   },
   "devDependencies": {
     "@types/bun": "latest",
