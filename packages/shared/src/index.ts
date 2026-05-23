@@ -14,5 +14,5 @@ export {
   messagePartsSchema,
   chatStreamEventSchema,
   type MessagePart,
-  type chatStreamEvent,
+  type ChatStreamEvent,
 } from "./schemas";
