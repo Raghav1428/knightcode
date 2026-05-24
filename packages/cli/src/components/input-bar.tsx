@@ -31,7 +31,25 @@ const MAX_VISIBLE_MENTIONS = 8;
 const CURRENT_DIRECTORY = process.cwd();
 const MAX_FALLBACK_MENTION_CANDIDATES = 32;
 const MENTION_QUERY_CHARACTER = /[A-Za-z0-9._/-]/;
-const RECURSIVE_MENTION_IGNORED_DIRECTORIES = new Set(["node_modules"]);
+const RECURSIVE_MENTION_IGNORED_DIRECTORIES = new Set([
+  "node_modules",
+  ".git",
+  "venv",
+  ".venv",
+  "env",
+  ".env",
+  "dist",
+  "build",
+  "out",
+  ".next",
+  ".nuxt",
+  ".svelte-kit",
+  "target",
+  "__pycache__",
+  ".turbo",
+  ".idea",
+  ".vscode",
+]);
 
 type MentionMatch = {
   start: number;
@@ -142,6 +160,12 @@ async function getMentionCandidates(
     const directMatches = entries
       .filter((entry) => showHiddenEntries || !entry.name.startsWith("."))
       .filter((entry) => {
+        if (
+          entry.isDirectory() &&
+          RECURSIVE_MENTION_IGNORED_DIRECTORIES.has(entry.name)
+        ) {
+          return false;
+        }
         return (
           lowercasePrefix === "" ||
           entry.name.toLowerCase().startsWith(lowercasePrefix)
