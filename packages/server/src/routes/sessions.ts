@@ -1,26 +1,15 @@
 import { zValidator } from "@hono/zod-validator";
 import { Prisma } from "@knightcode/database";
 import { db } from "@knightcode/database/client";
-import { MessageStatus, Mode, Role } from "@knightcode/database/enums";
-import { findSupportedChatModel } from "@knightcode/shared";
 import * as Sentry from "@sentry/hono/bun";
 import { Hono } from "hono";
 import { z } from "zod";
+import type { AuthenticatedEnv } from "../middleware/require-auth";
+import { requireCreditsBalance } from "../middleware/require-credits-balance";
 
 const createSessionSchema = z.object({
   title: z.string(),
-  cwd: z.string().optional(),
   reasoningEffort: z.enum(["none", "low", "medium", "high", "max"]).optional(),
-  initialMessage: z
-    .object({
-      role: z.enum(Role),
-      content: z.string(),
-      mode: z.enum(Mode),
-      model: z
-        .string()
-        .refine((id) => !!findSupportedChatModel(id), "Unsupported model"),
-    })
-    .optional(),
 });
 
 const updateSessionSchema = z.object({
@@ -55,9 +44,11 @@ const updateSessionValidator = zValidator(
   },
 );
 
-const app = new Hono()
+const app = new Hono<AuthenticatedEnv>()
   .get("/", async (c) => {
+    const userId = c.get("userId");
     const sessions = await db.session.findMany({
+      where: { userId },
       orderBy: { createdAt: "desc" },
       select: {
         id: true,
@@ -79,18 +70,16 @@ const app = new Hono()
     // )
 
     const id = c.req.param("id");
+    const userId = c.get("userId");
 
     const session = await db.session.findUnique({
-      where: { id },
-      include: {
-        messages: { orderBy: { createdAt: "asc" } },
-      },
+      where: { id, userId },
     });
 
     if (!session) {
       Sentry.logger.warn("Session not found", {
         sessionId: id,
-        userId: "mock-user",
+        userId,
       });
       return c.json({ error: "Session not found" }, 404);
     }
@@ -99,11 +88,12 @@ const app = new Hono()
   })
   .patch("/:id", updateSessionValidator, async (c) => {
     const id = c.req.param("id");
+    const userId = c.get("userId");
     const { reasoningEffort } = c.req.valid("json");
 
     try {
       const session = await db.session.update({
-        where: { id },
+        where: { id, userId },
         data: { reasoningEffort },
       });
       return c.json(session);
@@ -121,7 +111,7 @@ const app = new Hono()
       return c.json({ error: "Failed to update session" }, 500);
     }
   })
-  .post("/", createSessionValidator, async (c) => {
+  .post("/", requireCreditsBalance, createSessionValidator, async (c) => {
     // MOCK: Uncomment to simulate slow session loading
     // await new Promise((r) => setTimeout(r, 5000))
 
@@ -130,23 +120,14 @@ const app = new Hono()
     //   500,
     //   { message: "Mock error: session loading failed" }
     // )
-
-    const { initialMessage, ...data } = c.req.valid("json");
+    const userId = c.get("userId");
+    const data = c.req.valid("json");
 
     const session = await db.session.create({
       data: {
         ...data,
-        userId: "mock-user",
-        ...(initialMessage && {
-          messages: {
-            create: {
-              ...initialMessage,
-              status: MessageStatus.COMPLETE,
-            },
-          },
-        }),
+        userId,
       },
-      include: { messages: true },
     });
 
     return c.json(session, 201);

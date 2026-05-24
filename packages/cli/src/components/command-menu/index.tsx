@@ -27,7 +27,9 @@ export function CommandMenu({
 }: CommandMenuProps) {
   const { colors } = useTheme();
   const filtered = getFilteredCommands(query);
-  const visibleHeight = Math.min(filtered.length, MAX_VISIBLE_ITEMS);
+  const terminalHeight = process.stdout?.rows && process.stdout.rows > 0 ? process.stdout.rows : 24;
+  const maxMenuHeight = Math.max(2, terminalHeight - 6);
+  const visibleHeight = Math.min(filtered.length, MAX_VISIBLE_ITEMS, maxMenuHeight);
 
   if (filtered.length === 0) {
     return (

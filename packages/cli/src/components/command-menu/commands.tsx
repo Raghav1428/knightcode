@@ -1,4 +1,7 @@
-import { SUPPORTED_CHAT_MODELS, findSupportedChatModel } from "@knightcode/shared";
+import {
+  SUPPORTED_CHAT_MODELS,
+  findSupportedChatModel,
+} from "@knightcode/shared";
 import {
   AgentsDialogContent,
   ModelsDialogContent,
@@ -8,6 +11,9 @@ import {
 } from "../dialogs";
 import type { Command } from "./types";
 import { apiClient } from "../../lib/api-client";
+import { performLogin } from "../../lib/oauth";
+import { clearAuth } from "../../lib/auth";
+import { openBillingPortal, openUpgradeCheckout } from "../../lib/upgrade";
 
 export const COMMANDS: Command[] = [
   {
@@ -45,11 +51,18 @@ export const COMMANDS: Command[] = [
     name: "login",
     description: "Sign in to your account",
     value: "/login",
-    action: (ctx) => {
+    action: async (ctx) => {
       ctx.toast.show({
-        message: "Opening login flow...",
-        variant: "success",
+        message: "Opening browser to sign in...",
       });
+      try {
+        await performLogin();
+        ctx.toast.show({ variant: "success", message: "Sign in successful" });
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Sign in failed";
+        ctx.toast.show({ variant: "error", message });
+      }
     },
   },
   {
@@ -57,9 +70,10 @@ export const COMMANDS: Command[] = [
     description: "Sign out of your account",
     value: "/logout",
     action: (ctx) => {
+      clearAuth();
       ctx.toast.show({
-        message: "Logging out...",
-        variant: "info",
+        message: "Logged out successfull",
+        variant: "success",
       });
     },
   },
@@ -101,7 +115,6 @@ export const COMMANDS: Command[] = [
         });
         return;
       }
-
       ctx.dialog.open({
         title: "Select Reasoning Effort",
         children: (
@@ -160,22 +173,44 @@ export const COMMANDS: Command[] = [
     name: "upgrade",
     description: "Upgrade your subscription plan",
     value: "/upgrade",
-    action: (ctx) => {
+    action: async (ctx) => {
       ctx.toast.show({
         message: "Opening upgrade options...",
-        variant: "success",
       });
+      try {
+        await openUpgradeCheckout();
+        ctx.toast.show({
+          message: "Checkout open in browser",
+          variant: "success",
+        });
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Failed to open checkout";
+        ctx.toast.show({ message, variant: "error" });
+      }
     },
   },
   {
     name: "usage",
     description: "View current usage and limits",
     value: "/usage",
-    action: (ctx) => {
+    action: async (ctx) => {
       ctx.toast.show({
-        message: "Fetching usage statistics...",
-        variant: "info",
+        message: "Opening usage portal...",
       });
+      try {
+        await openBillingPortal();
+        ctx.toast.show({
+          message: "Billing portal opened in browser",
+          variant: "success",
+        });
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Failed to open billing portal";
+        ctx.toast.show({ message, variant: "error" });
+      }
     },
   },
 ];
