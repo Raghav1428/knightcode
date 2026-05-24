@@ -22,7 +22,12 @@ const app = new Hono().get("/callback", (c) => {
     const payload = JSON.parse(Buffer.from(encoded, "base64url").toString());
     const port = payload.port;
 
-    if (!port || typeof port !== "number") {
+    if (
+      typeof port !== "number" ||
+      !Number.isInteger(port) ||
+      port < 1 ||
+      port > 65535
+    ) {
       throw new Error("Invalid port in state");
     }
 

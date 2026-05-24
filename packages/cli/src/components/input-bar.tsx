@@ -190,7 +190,12 @@ async function getMentionCandidates(
         };
       });
 
-    if (directMatches.length > 0 || directoryPart !== "" || namePrefix === "") {
+    if (
+      directMatches.length > 0 ||
+      directoryPart !== "" ||
+      namePrefix === "" ||
+      namePrefix.length < 2
+    ) {
       return directMatches;
     }
 
@@ -264,7 +269,9 @@ function FileMentionMenu({
   onExecute,
 }: FileMentionMenuProps) {
   const { colors } = useTheme();
-  const visibleHeight = Math.min(candidates.length, MAX_VISIBLE_MENTIONS);
+  const terminalHeight = process.stdout?.rows && process.stdout.rows > 0 ? process.stdout.rows : 24;
+  const maxMenuHeight = Math.max(2, terminalHeight - 6);
+  const visibleHeight = Math.min(candidates.length, MAX_VISIBLE_MENTIONS, maxMenuHeight);
 
   if (candidates.length === 0) {
     return (
@@ -506,20 +513,26 @@ export function InputBar({ onSubmit, disabled = false }: Props) {
       if (ignore) return;
 
       setMentionCandidates(nextCandidates);
-      setMentionSelectedIndex((currentIndex) => {
-        if (nextCandidates.length === 0) {
-          return 0;
-        }
-        return Math.min(currentIndex, nextCandidates.length - 1);
-      });
     };
 
-    void loadCandidates();
+    const handle = setTimeout(() => {
+      void loadCandidates();
+    }, 120);
 
     return () => {
       ignore = true;
+      clearTimeout(handle);
     };
   }, [activeMention]);
+
+  // Reset selection index and scroll offset when candidates update
+  useEffect(() => {
+    setMentionSelectedIndex(0);
+    const timer = setTimeout(() => {
+      mentionScrollRef.current?.scrollTo(0);
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [mentionCandidates]);
 
   // Wire up textarea submit handler once so it always reads the latest state.
   useEffect(() => {

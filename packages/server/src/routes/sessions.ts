@@ -2,11 +2,12 @@ import { zValidator } from "@hono/zod-validator";
 import { Prisma } from "@knightcode/database";
 import { db } from "@knightcode/database/client";
 import { MessageStatus, Mode, Role } from "@knightcode/database/enums";
-import { findSupportedChatModel } from "@knightcode/shared";
 import * as Sentry from "@sentry/hono/bun";
 import { Hono } from "hono";
 import { z } from "zod";
 import type { AuthenticatedEnv } from "../middleware/require-auth";
+import { isSupportedChatModel } from "../lib/models";
+import { requireCreditsBalance } from "../middleware/require-credits-balance";
 
 const createSessionSchema = z.object({
   title: z.string(),
@@ -17,9 +18,7 @@ const createSessionSchema = z.object({
       role: z.enum(Role),
       content: z.string(),
       mode: z.enum(Mode),
-      model: z
-        .string()
-        .refine((id) => !!findSupportedChatModel(id), "Unsupported model"),
+      model: z.string().refine(isSupportedChatModel, "Unsupported model"),
     })
     .optional(),
 });
@@ -126,7 +125,7 @@ const app = new Hono<AuthenticatedEnv>()
       return c.json({ error: "Failed to update session" }, 500);
     }
   })
-  .post("/", createSessionValidator, async (c) => {
+  .post("/", requireCreditsBalance, createSessionValidator, async (c) => {
     // MOCK: Uncomment to simulate slow session loading
     // await new Promise((r) => setTimeout(r, 5000))
 
