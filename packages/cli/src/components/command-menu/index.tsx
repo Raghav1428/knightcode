@@ -33,14 +33,14 @@ export function CommandMenu({
 
   if (filtered.length === 0) {
     return (
-      <box paddingX={1}>
+      <box paddingX={1} backgroundColor={colors.surface}>
         <text attributes={TextAttributes.DIM}>No matching commands</text>
       </box>
     );
   }
 
   return (
-    <scrollbox ref={scrollRef} height={visibleHeight}>
+    <scrollbox ref={scrollRef} height={visibleHeight} backgroundColor={colors.surface}>
       {filtered.map((cmd, i) => {
         const isSelected = i === selectedIndex;
 
@@ -50,7 +50,7 @@ export function CommandMenu({
             flexDirection="row"
             paddingX={1}
             height={1}
-            backgroundColor={isSelected ? colors.selection : undefined}
+            backgroundColor={isSelected ? colors.selection : colors.surface}
             onMouseMove={() => onSelect(i)}
             onMouseDown={() => onExecute(i)}
           >

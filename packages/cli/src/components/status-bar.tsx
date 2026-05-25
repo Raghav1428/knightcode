@@ -19,7 +19,16 @@ function getReasoningColor(level: string, colors: ThemeColors): string {
   }
 }
 
-export function StatusBar() {
+type Props = {
+  tokenStats?: {
+    inputTokens: number;
+    outputTokens: number;
+    totalCost: number;
+    lastInputTokens?: number;
+  };
+};
+
+export function StatusBar({ tokenStats }: Props) {
   const { mode, model, reasoningEffort } = usePromptConfig();
   const { colors } = useTheme();
 
@@ -27,6 +36,37 @@ export function StatusBar() {
   const showReasoning =
     modelDef?.supportsThinking && reasoningEffort !== "none";
   const modelText = model.replace(/:free$/, "");
+
+  const contextLimit = modelDef?.contextWindow || 128000;
+  const lastInputTokens = tokenStats?.lastInputTokens;
+
+  let contextRemainingElement = null;
+  if (lastInputTokens !== undefined) {
+    const remaining = Math.max(0, contextLimit - lastInputTokens);
+    const percentLeft = Math.round((remaining / contextLimit) * 100);
+    const remainingK = (remaining / 1000).toFixed(0);
+    const limitK = (contextLimit / 1000).toFixed(0);
+
+    let percentColor = colors.success;
+    if (percentLeft <= 30) {
+      percentColor = colors.error;
+    } else if (percentLeft <= 50) {
+      percentColor = colors.primary;
+    }
+
+    contextRemainingElement = (
+      <>
+        <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>
+          •
+        </text>
+        <text fg={colors.dimSeparator}>ctx: </text>
+        <text fg={percentColor}>{percentLeft}%</text>
+        <text fg={colors.dimSeparator}>
+          ({remainingK}k/{limitK}k left)
+        </text>
+      </>
+    );
+  }
 
   return (
     <box flexDirection="row" gap={1}>
@@ -48,6 +88,22 @@ export function StatusBar() {
           </text>
         </>
       )}
+
+      {tokenStats && (tokenStats.inputTokens > 0 || tokenStats.outputTokens > 0) && (
+        <>
+          <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>
+            •
+          </text>
+          <text fg={colors.info}>
+            {tokenStats.totalCost > 0
+              ? `$${tokenStats.totalCost.toFixed(4)}`
+              : "Free"}{" "}
+            ({((tokenStats.inputTokens + tokenStats.outputTokens) / 1000).toFixed(1)}k tkn)
+          </text>
+        </>
+      )}
+
+      {contextRemainingElement}
     </box>
   );
 }

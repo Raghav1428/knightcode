@@ -18,6 +18,7 @@ export type CommandContext = {
   reasoningEffort: ReasoningEffortLevel;
   setReasoningEffort: (level: ReasoningEffortLevel) => void;
   sessionId?: string;
+  compact?: () => void;
 };
 
 export type Command = {

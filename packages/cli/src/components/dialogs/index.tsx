@@ -3,4 +3,6 @@ export { ModelsDialogContent } from "./models-dialog";
 export { SessionsDialogContent } from "./sessions-dialog";
 export { ThemeDialogContent } from "./theme-dialog";
 export { ReasoningDialogContent } from "./reasoning-dialog";
+export { MemoryDialogContent } from "./memory-dialog";
+export { DiffDialogContent } from "./diff-dialog";
 

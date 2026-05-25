@@ -12,6 +12,7 @@ type SupportedChatModelDefinition = {
   provider: SupportedProvider;
   pricing: ModelPricing;
   supportsThinking?: boolean;
+  contextWindow: number;
 };
 
 export const SUPPORTED_CHAT_MODELS = [
@@ -23,6 +24,7 @@ export const SUPPORTED_CHAT_MODELS = [
       outputUsdPerMillionTokens: 15,
     },
     supportsThinking: true,
+    contextWindow: 1000000,
   },
   {
     id: "claude-haiku-4-5",
@@ -31,6 +33,7 @@ export const SUPPORTED_CHAT_MODELS = [
       inputUsdPerMillionTokens: 1,
       outputUsdPerMillionTokens: 5,
     },
+    contextWindow: 200000,
   },
   {
     id: "claude-opus-4-6",
@@ -40,6 +43,7 @@ export const SUPPORTED_CHAT_MODELS = [
       outputUsdPerMillionTokens: 25,
     },
     supportsThinking: true,
+    contextWindow: 1000000,
   },
   {
     id: "gpt-5.4",
@@ -49,6 +53,7 @@ export const SUPPORTED_CHAT_MODELS = [
       outputUsdPerMillionTokens: 15,
     },
     supportsThinking: true,
+    contextWindow: 1050000,
   },
   {
     id: "gpt-5.4-mini",
@@ -58,6 +63,7 @@ export const SUPPORTED_CHAT_MODELS = [
       outputUsdPerMillionTokens: 4.5,
     },
     supportsThinking: true,
+    contextWindow: 400000,
   },
   {
     id: "gpt-5.4-nano",
@@ -66,6 +72,7 @@ export const SUPPORTED_CHAT_MODELS = [
       inputUsdPerMillionTokens: 0.2,
       outputUsdPerMillionTokens: 1.25,
     },
+    contextWindow: 400000,
   },
   {
     id: "baidu/cobuddy:free",
@@ -75,6 +82,7 @@ export const SUPPORTED_CHAT_MODELS = [
       outputUsdPerMillionTokens: 0,
     },
     supportsThinking: true,
+    contextWindow: 131072,
   },
   {
     id: "poolside/laguna-xs.2:free",
@@ -84,6 +92,7 @@ export const SUPPORTED_CHAT_MODELS = [
       outputUsdPerMillionTokens: 0,
     },
     supportsThinking: true,
+    contextWindow: 131072,
   },
   {
     id: "poolside/laguna-m.1:free",
@@ -93,6 +102,7 @@ export const SUPPORTED_CHAT_MODELS = [
       outputUsdPerMillionTokens: 0,
     },
     supportsThinking: true,
+    contextWindow: 131072,
   },
   {
     id: "openrouter/owl-alpha",
@@ -101,6 +111,7 @@ export const SUPPORTED_CHAT_MODELS = [
       inputUsdPerMillionTokens: 0,
       outputUsdPerMillionTokens: 0,
     },
+    contextWindow: 1048576,
   },
   {
     id: "deepseek/deepseek-v4-flash:free",
@@ -110,6 +121,7 @@ export const SUPPORTED_CHAT_MODELS = [
       outputUsdPerMillionTokens: 0,
     },
     supportsThinking: true,
+    contextWindow: 1048576,
   },
   {
     id: "arcee-ai/trinity-large-thinking:free",
@@ -119,6 +131,7 @@ export const SUPPORTED_CHAT_MODELS = [
       outputUsdPerMillionTokens: 0,
     },
     supportsThinking: true,
+    contextWindow: 262144,
   },
   {
     id: "nvidia/nemotron-3-super-120b-a12b:free",
@@ -128,6 +141,7 @@ export const SUPPORTED_CHAT_MODELS = [
       outputUsdPerMillionTokens: 0,
     },
     supportsThinking: true,
+    contextWindow: 1000000,
   },
   {
     id: "openai/gpt-oss-120b:free",
@@ -137,6 +151,7 @@ export const SUPPORTED_CHAT_MODELS = [
       outputUsdPerMillionTokens: 0,
     },
     supportsThinking: true,
+    contextWindow: 131072,
   },
   {
     id: "z-ai/glm-4.5-air:free",
@@ -146,14 +161,20 @@ export const SUPPORTED_CHAT_MODELS = [
       outputUsdPerMillionTokens: 0,
     },
     supportsThinking: true,
+    contextWindow: 131072,
   },
 ] as const satisfies readonly SupportedChatModelDefinition[];
 
-export type SupportedChatModel = (typeof SUPPORTED_CHAT_MODELS)[number] & SupportedChatModelDefinition;
+export type SupportedChatModel = (typeof SUPPORTED_CHAT_MODELS)[number] &
+  SupportedChatModelDefinition;
 export type SupportedChatModelId = (typeof SUPPORTED_CHAT_MODELS)[number]["id"];
 
-export function findSupportedChatModel(modelId: string): SupportedChatModel | undefined {
-  return SUPPORTED_CHAT_MODELS.find((model) => model.id === modelId) as SupportedChatModel | undefined;
+export function findSupportedChatModel(
+  modelId: string,
+): SupportedChatModel | undefined {
+  return SUPPORTED_CHAT_MODELS.find((model) => model.id === modelId) as
+    | SupportedChatModel
+    | undefined;
 }
 
 export const DEFAULT_CHAT_MODEL_ID: SupportedChatModelId =

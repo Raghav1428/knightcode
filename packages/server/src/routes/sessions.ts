@@ -13,7 +13,8 @@ const createSessionSchema = z.object({
 });
 
 const updateSessionSchema = z.object({
-  reasoningEffort: z.enum(["none", "low", "medium", "high", "max"]),
+  reasoningEffort: z.enum(["none", "low", "medium", "high", "max"]).optional(),
+  messages: z.array(z.any()).optional(),
 });
 
 const createSessionValidator = zValidator(
@@ -89,12 +90,20 @@ const app = new Hono<AuthenticatedEnv>()
   .patch("/:id", updateSessionValidator, async (c) => {
     const id = c.req.param("id");
     const userId = c.get("userId");
-    const { reasoningEffort } = c.req.valid("json");
+    const { reasoningEffort, messages } = c.req.valid("json");
 
     try {
+      const updateData: Prisma.SessionUpdateInput = {};
+      if (reasoningEffort) {
+        updateData.reasoningEffort = reasoningEffort;
+      }
+      if (messages) {
+        updateData.messages = messages as unknown as Prisma.InputJsonValue;
+      }
+
       const session = await db.session.update({
         where: { id, userId },
-        data: { reasoningEffort },
+        data: updateData,
       });
       return c.json(session);
     } catch (err) {
@@ -104,7 +113,7 @@ const app = new Hono<AuthenticatedEnv>()
       ) {
         return c.json({ error: "Session not found" }, 404);
       }
-      Sentry.logger.error("Failed to update session reasoningEffort", {
+      Sentry.logger.error("Failed to update session properties", {
         sessionId: id,
         error: err,
       });

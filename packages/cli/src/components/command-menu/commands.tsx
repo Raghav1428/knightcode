@@ -1,19 +1,25 @@
 import {
-  SUPPORTED_CHAT_MODELS,
-  findSupportedChatModel,
-} from "@knightcode/shared";
-import {
   AgentsDialogContent,
   ModelsDialogContent,
   SessionsDialogContent,
   ThemeDialogContent,
   ReasoningDialogContent,
+  MemoryDialogContent,
+  DiffDialogContent,
 } from "../dialogs";
+import { undoSessionChanges } from "../../lib/local-tools";
+import {
+  SUPPORTED_CHAT_MODELS,
+  findSupportedChatModel,
+} from "@knightcode/shared";
 import type { Command } from "./types";
 import { apiClient } from "../../lib/api-client";
 import { performLogin } from "../../lib/oauth";
 import { clearAuth } from "../../lib/auth";
 import { openBillingPortal, openUpgradeCheckout } from "../../lib/upgrade";
+import fs from "fs";
+import path from "path";
+import { detectProjectStackSync } from "../../lib/project-detection";
 
 export const COMMANDS: Command[] = [
   {
@@ -210,6 +216,116 @@ export const COMMANDS: Command[] = [
             ? error.message
             : "Failed to open billing portal";
         ctx.toast.show({ message, variant: "error" });
+      }
+    },
+  },
+  {
+    name: "init",
+    description: "Initialize KNIGHTCODE.md project memory",
+    value: "/init",
+    action: (ctx) => {
+      const localDir = process.cwd();
+      const localPath = path.join(localDir, "KNIGHTCODE.md");
+
+      if (fs.existsSync(localPath)) {
+        ctx.toast.show({
+          variant: "info",
+          message: "KNIGHTCODE.md already exists in this project",
+        });
+        return;
+      }
+
+      const stack = detectProjectStackSync();
+      const content = `# Project Memory: KnightCode Guidelines
+
+## Tech Stack
+- Frameworks: ${stack.frameworks.length > 0 ? stack.frameworks.join(", ") : "None detected"}
+- Package Manager: ${stack.packageManager}
+- TypeScript: ${stack.isTypeScript ? "Yes" : "No"}
+
+## Project Rules
+1. Maintain existing style conventions.
+2. Run relevant tests before declaring a task finished.
+3. Batch tools where possible.
+`;
+      try {
+        fs.writeFileSync(localPath, content, "utf-8");
+        ctx.toast.show({
+          variant: "success",
+          message: "Created KNIGHTCODE.md project memory template!",
+        });
+      } catch (err) {
+        ctx.toast.show({
+          variant: "error",
+          message: `Failed to create KNIGHTCODE.md: ${(err as Error).message}`,
+        });
+      }
+    },
+  },
+  {
+    name: "memory",
+    description: "Write guidelines to KNIGHTCODE.md project memory",
+    value: "/memory",
+    action: (ctx) => {
+      ctx.dialog.open({
+        title: "Project Guidelines",
+        children: <MemoryDialogContent />,
+      });
+    },
+  },
+  {
+    name: "diff",
+    description: "Show repository diff of uncommitted changes",
+    value: "/diff",
+    action: (ctx) => {
+      ctx.dialog.open({
+        title: "Repository Diff",
+        children: <DiffDialogContent />,
+      });
+    },
+  },
+  {
+    name: "undo",
+    description: "Undo all file changes made in this session",
+    value: "/undo",
+    action: async (ctx) => {
+      try {
+        const { revertedFiles } = await undoSessionChanges();
+        if (revertedFiles.length === 0) {
+          ctx.toast.show({
+            variant: "info",
+            message: "No files modified in this session to revert.",
+          });
+        } else {
+          ctx.toast.show({
+            variant: "success",
+            message: `Reverted ${revertedFiles.length} file(s) modified in this session: ${revertedFiles.join(", ")}`,
+          });
+        }
+      } catch (err) {
+        ctx.toast.show({
+          variant: "error",
+          message: `Failed to revert: ${(err as Error).message}`,
+        });
+      }
+    },
+  },
+  {
+    name: "compact",
+    description: "Compact chat history to free up context",
+    value: "/compact",
+    action: (ctx) => {
+      if (ctx.compact) {
+        ctx.compact();
+        ctx.toast.show({
+          variant: "success",
+          message: "Chat history compacted successfully.",
+        });
+      } else {
+        ctx.toast.show({
+          variant: "error",
+          message: "Compaction is not available in this context.",
+        });
       }
     },
   },

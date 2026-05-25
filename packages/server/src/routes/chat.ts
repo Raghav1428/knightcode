@@ -54,6 +54,14 @@ const submitSchema = z.object({
     .min(1),
   mode: modeSchema,
   model: z.string().refine(isSupportedChatModel, "Unsupported model"),
+  globalInstructions: z.string().optional(),
+  projectInstructions: z.string().optional(),
+  gitBranchName: z.string().optional(),
+  gitStatus: z.string().optional(),
+  gitDiffSummary: z.string().optional(),
+  frameworks: z.array(z.string()).optional(),
+  packageManager: z.string().optional(),
+  isTypeScript: z.boolean().optional(),
 });
 
 const submitValidator = zValidator("json", submitSchema, (result, c) => {
@@ -79,7 +87,20 @@ const app = new Hono<AuthenticatedEnv>().post(
   submitValidator,
   async (c) => {
     const userId = c.get("userId");
-    const { id, messages, mode, model } = c.req.valid("json");
+    const {
+      id,
+      messages,
+      mode,
+      model,
+      globalInstructions,
+      projectInstructions,
+      gitBranchName,
+      gitStatus,
+      gitDiffSummary,
+      frameworks,
+      packageManager,
+      isTypeScript,
+    } = c.req.valid("json");
 
     const session = await db.session.findUnique({
       where: { id, userId },
@@ -126,7 +147,17 @@ const app = new Hono<AuthenticatedEnv>().post(
 
     const result = streamText({
       model: resolvedModel.model,
-      system: buildSystemPrompt({ mode }),
+      system: buildSystemPrompt({
+        mode,
+        globalInstructions,
+        projectInstructions,
+        gitBranchName,
+        gitStatus,
+        gitDiffSummary,
+        frameworks,
+        packageManager,
+        isTypeScript,
+      }),
       messages: modelMessages,
       tools,
       providerOptions: resolvedModel.providerOptions,
@@ -144,11 +175,13 @@ const app = new Hono<AuthenticatedEnv>().post(
 
         if (part.type !== "finish") return undefined;
 
+        const usage = part.totalUsage ?? completedUsage;
+
         return {
           mode,
           model,
           durationMs: Date.now() - startTime,
-          ...(completedUsage ? { usage: completedUsage } : {}),
+          ...(usage ? { usage } : {}),
         };
       },
       async onFinish(event) {

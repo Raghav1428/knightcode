@@ -2,6 +2,7 @@ import { TextAttributes } from "@opentui/core";
 import type { ReactNode } from "react";
 import { InputBar } from "./input-bar";
 import { Spinner } from "./spinner";
+import { TodoPanel } from "./todo-panel";
 import { usePromptConfig } from "../providers/prompt-config";
 
 type Props = {
@@ -10,6 +11,13 @@ type Props = {
   inputDisabled?: boolean;
   loading?: boolean;
   interruptible?: boolean;
+  compact?: () => void;
+  tokenStats?: {
+    inputTokens: number;
+    outputTokens: number;
+    totalCost: number;
+    lastInputTokens?: number;
+  };
 };
 
 export function SessionShell({
@@ -18,6 +26,8 @@ export function SessionShell({
   inputDisabled = false,
   loading = false,
   interruptible = false,
+  compact,
+  tokenStats,
 }: Props) {
   const { mode } = usePromptConfig();
   return (
@@ -30,11 +40,12 @@ export function SessionShell({
       paddingX={2}
       gap={1}
     >
-      <scrollbox flexGrow={1} width="100%" stickyScroll stickyStart="bottom">
+      <scrollbox flexGrow={1} flexShrink={1} width="100%" stickyScroll stickyStart="bottom">
         <box>{children}</box>
       </scrollbox>
+      <TodoPanel />
       <box flexShrink={0}>
-        <InputBar onSubmit={onSubmit} disabled={inputDisabled} />
+        <InputBar onSubmit={onSubmit} disabled={inputDisabled} compact={compact} tokenStats={tokenStats} />
       </box>
       <box
         flexShrink={0}

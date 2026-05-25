@@ -1,12 +1,60 @@
 import { Mode, toolInputSchemas, type ModeType } from "@knightcode/shared";
-import { mkdir, readFile, readdir, stat, writeFile } from "fs/promises";
+import { existsSync } from "fs";
+import { mkdir, readFile, readdir, stat, writeFile, unlink } from "fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "path";
+import { spawnSync } from "child_process";
+import { apiClient } from "./api-client";
+import { killProcessOnPort, registerProcess } from "./background-tasks";
 
-const MAX_FILE_SIZE = 10_000;
-const MAX_RESULTS = 200;
-const MAX_MATCHES = 50;
-const MAX_OUTPUT = 20_000;
-const DEFAULT_TIMEOUT = 30_000;
+const sessionOriginalContents = new Map<string, string | null>();
+
+async function recordOriginalContent(resolvedPath: string) {
+  if (sessionOriginalContents.has(resolvedPath)) {
+    return;
+  }
+  if (existsSync(resolvedPath)) {
+    try {
+      const content = await readFile(resolvedPath, "utf-8");
+      sessionOriginalContents.set(resolvedPath, content);
+    } catch {
+      // ignore
+    }
+  } else {
+    sessionOriginalContents.set(resolvedPath, null);
+  }
+}
+
+export async function undoSessionChanges(): Promise<{ revertedFiles: string[] }> {
+  const revertedFiles: string[] = [];
+  const cwd = resolveInsideCwd(".").resolved;
+
+  for (const [resolvedPath, originalContent] of sessionOriginalContents.entries()) {
+    try {
+      const relPath = relative(cwd, resolvedPath);
+      if (originalContent === null) {
+        if (existsSync(resolvedPath)) {
+          await unlink(resolvedPath);
+          revertedFiles.push(relPath);
+        }
+      } else {
+        await mkdir(dirname(resolvedPath), { recursive: true });
+        await writeFile(resolvedPath, originalContent, "utf-8");
+        revertedFiles.push(relPath);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  sessionOriginalContents.clear();
+  return { revertedFiles };
+}
+
+const MAX_FILE_SIZE = 100_000;
+const MAX_RESULTS = 500;
+const MAX_MATCHES = 200;
+const MAX_OUTPUT = 50_000;
+const DEFAULT_TIMEOUT = 120_000;
 
 function resolveInsideCwd(path: string) {
   const cwd = process.cwd();
@@ -33,23 +81,53 @@ export async function executeLocalTool(
 ) {
   if (
     mode === Mode.PLAN &&
-    !["readFile", "listDirectory", "glob", "grep"].includes(toolName)
+    !["readFile", "listDirectory", "glob", "grep", "webSearch", "webFetch", "todoWrite", "AskUserQuestion", "gitStatus", "gitDiff", "gitLog"].includes(toolName)
   ) {
     throw new Error(`Tool ${toolName} is not available in PLAN mode`);
   }
 
   switch (toolName) {
     case "readFile": {
-      const { path } = toolInputSchemas.readFile.parse(input);
+      const { path, offset, limit } = toolInputSchemas.readFile.parse(input);
       const { resolved } = resolveInsideCwd(path);
-      const content = await readFile(resolved, "utf-8");
-      return content.length > MAX_FILE_SIZE
+
+      const ext = path.split(".").pop()?.toLowerCase();
+      const imageExtensions = ["png", "jpg", "jpeg", "gif", "webp", "ico", "svg"];
+      if (ext && imageExtensions.includes(ext)) {
+        const buffer = await readFile(resolved);
+        const mimeType = ext === "svg" ? "image/svg+xml" : ext === "ico" ? "image/x-icon" : `image/${ext === "jpg" ? "jpeg" : ext}`;
+        return {
+          content: buffer.toString("base64"),
+          isImage: true,
+          mimeType,
+          totalLength: buffer.length,
+        };
+      }
+
+      const raw = await readFile(resolved, "utf-8");
+
+      // Paginated line-based reading
+      if (offset !== undefined || limit !== undefined) {
+        const lines = raw.split("\n");
+        const start = offset ?? 0;
+        const count = limit ?? 200;
+        const sliced = lines.slice(start, start + count);
+        return {
+          content: sliced.join("\n"),
+          totalLines: lines.length,
+          offset: start,
+          linesReturned: sliced.length,
+          truncated: start + count < lines.length,
+        };
+      }
+
+      return raw.length > MAX_FILE_SIZE
         ? {
-            content: content.slice(0, MAX_FILE_SIZE),
+            content: raw.slice(0, MAX_FILE_SIZE),
             truncated: true,
-            totalLength: content.length,
+            totalLength: raw.length,
           }
-        : { content };
+        : { content: raw };
     }
     case "listDirectory": {
       const { path } = toolInputSchemas.listDirectory.parse(input);
@@ -99,60 +177,151 @@ export async function executeLocalTool(
       return { files, ...(truncated ? { truncated: true } : {}) };
     }
     case "grep": {
-      const { pattern, path, include } = toolInputSchemas.grep.parse(input);
+      const {
+        pattern,
+        path,
+        include,
+        caseInsensitive,
+        contextLines,
+        outputMode = "content",
+        maxResults = 200,
+      } = toolInputSchemas.grep.parse(input);
       const { cwd, resolved } = resolveInsideCwd(path);
-      const args = [
-        "-rn",
-        "--color=never",
-        "--exclude-dir=node_modules",
-        "--exclude-dir=.git",
-        "-E",
-      ];
-      if (include) args.push(`--include=${include}`);
-      args.push(pattern, resolved);
 
-      const proc = Bun.spawn(["grep", ...args], {
-        cwd,
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      const [stdout, stderr] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-      ]);
-      const exitCode = await proc.exited;
+      let regex: RegExp;
+      try {
+        regex = new RegExp(pattern, caseInsensitive ? "i" : "");
+      } catch (err) {
+        throw new Error(`Invalid regex pattern: ${pattern}. ${(err as Error).message}`);
+      }
 
-      if (exitCode !== 0 && exitCode !== 1)
-        throw new Error(`grep failed: ${stderr.trim()}`);
-      if (!stdout.trim()) return { matches: [], message: "No matches found" };
+      // Check if resolved path is a directory or a file
+      const stats = await stat(resolved);
+      const filesToSearch: string[] = [];
 
-      const lines = stdout.trim().split("\n");
-      const matches: { file: string; line: number; content: string }[] = [];
+      if (stats.isDirectory()) {
+        const globPattern = include ?? "**/*";
+        const glob = new Bun.Glob(globPattern);
+
+        for await (const match of glob.scan({
+          cwd: resolved,
+          dot: false,
+          onlyFiles: true,
+        })) {
+          const isIgnored =
+            match.includes("node_modules") ||
+            match.includes(".git") ||
+            match.includes(".knightcode");
+          if (isIgnored) continue;
+          filesToSearch.push(resolve(resolved, match));
+        }
+      } else {
+        filesToSearch.push(resolved);
+      }
+
+      // Sort files to be deterministic
+      filesToSearch.sort();
+
+      const results: any[] = [];
       let truncated = false;
+      const limit = Math.min(maxResults, MAX_MATCHES);
 
-      for (const line of lines) {
-        if (matches.length >= MAX_MATCHES) {
+      for (const absPath of filesToSearch) {
+        if (results.length >= limit) {
           truncated = true;
           break;
         }
-        const match = line.match(/^(.+?):(\d+):(.*)$/);
-        if (match) {
-          matches.push({
-            file: relative(cwd, match[1]!),
-            line: Number(match[2]),
-            content: match[3]!,
-          });
+
+        let content: string;
+        try {
+          content = await readFile(absPath, "utf-8");
+          // Simple binary file check: contains null character
+          if (content.includes("\0")) continue;
+        } catch {
+          continue;
+        }
+
+        const relativePath = relative(cwd, absPath);
+
+        if (outputMode === "files") {
+          regex.lastIndex = 0;
+          if (regex.test(content)) {
+            results.push({ file: relativePath });
+          }
+        } else if (outputMode === "count") {
+          const globalRegex = new RegExp(pattern, caseInsensitive ? "gi" : "g");
+          const matches = content.match(globalRegex);
+          if (matches && matches.length > 0) {
+            results.push({ file: relativePath, count: matches.length });
+          }
+        } else {
+          // Content mode
+          const lines = content.split("\n");
+          const matchIndices: number[] = [];
+
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i]!;
+            regex.lastIndex = 0;
+            if (regex.test(line)) {
+              matchIndices.push(i);
+            }
+          }
+
+          if (matchIndices.length === 0) continue;
+
+          // If no context lines are requested, just return match lines
+          if (contextLines === undefined || contextLines <= 0) {
+            for (const idx of matchIndices) {
+              if (results.length >= limit) {
+                truncated = true;
+                break;
+              }
+              results.push({
+                file: relativePath,
+                line: idx + 1,
+                type: "match" as const,
+                content: lines[idx]!,
+              });
+            }
+          } else {
+            // With context lines - return unique lines in chronological order
+            const includedLines = new Set<number>();
+            for (const idx of matchIndices) {
+              const start = Math.max(0, idx - contextLines);
+              const end = Math.min(lines.length - 1, idx + contextLines);
+              for (let i = start; i <= end; i++) {
+                includedLines.add(i);
+              }
+            }
+
+            const sortedIncluded = Array.from(includedLines).sort((a, b) => a - b);
+            for (const idx of sortedIncluded) {
+              if (results.length >= limit) {
+                truncated = true;
+                break;
+              }
+              const isMatch = matchIndices.includes(idx);
+              results.push({
+                file: relativePath,
+                line: idx + 1,
+                type: isMatch ? ("match" as const) : ("context" as const),
+                content: lines[idx]!,
+              });
+            }
+          }
         }
       }
 
       return {
-        matches,
-        ...(truncated ? { truncated: true, totalMatches: lines.length } : {}),
+        outputMode,
+        results,
+        ...(truncated ? { truncated: true } : {}),
       };
     }
     case "writeFile": {
       const { path, content } = toolInputSchemas.writeFile.parse(input);
       const { cwd, resolved } = resolveInsideCwd(path);
+      await recordOriginalContent(resolved);
       await mkdir(dirname(resolved), { recursive: true });
       await writeFile(resolved, content, "utf-8");
       return {
@@ -162,22 +331,53 @@ export async function executeLocalTool(
       };
     }
     case "editFile": {
-      const { path, oldString, newString } =
+      const { path, oldString, newString, replaceAll } =
         toolInputSchemas.editFile.parse(input);
       const { cwd, resolved } = resolveInsideCwd(path);
+      await recordOriginalContent(resolved);
       const content = await readFile(resolved, "utf-8");
       const occurrences = content.split(oldString).length - 1;
 
       if (occurrences === 0) throw new Error("oldString not found in file");
-      if (occurrences > 1)
-        throw new Error(`oldString is ambiguous; found ${occurrences} matches`);
+      if (occurrences > 1 && !replaceAll)
+        throw new Error(`oldString is ambiguous; found ${occurrences} matches. Use replaceAll: true to replace all.`);
 
-      await writeFile(resolved, content.replace(oldString, newString), "utf-8");
-      return { success: true as const, path: relative(cwd, resolved) };
+      const updated = replaceAll
+        ? content.replaceAll(oldString, newString)
+        : content.replace(oldString, newString);
+
+      await writeFile(resolved, updated, "utf-8");
+      return {
+        success: true as const,
+        path: relative(cwd, resolved),
+        replacements: replaceAll ? occurrences : 1,
+      };
     }
     case "bash": {
-      const { command, timeout = DEFAULT_TIMEOUT } =
+      const { command, timeout = DEFAULT_TIMEOUT, runInBackground = false, port } =
         toolInputSchemas.bash.parse(input);
+
+      if (runInBackground) {
+        if (port !== undefined) {
+          killProcessOnPort(port);
+        }
+
+        const proc = Bun.spawn(["bash", "-c", command], {
+          cwd: resolveInsideCwd(".").resolved,
+          stdout: "ignore",
+          stderr: "ignore",
+          env: { ...process.env, TERM: "dumb" },
+        });
+
+        registerProcess(proc.pid, command, port, proc);
+
+        return {
+          success: true,
+          pid: proc.pid,
+          message: `Command started in the background. PID: ${proc.pid}`,
+        };
+      }
+
       const proc = Bun.spawn(["bash", "-c", command], {
         cwd: resolveInsideCwd(".").resolved,
         stdout: "pipe",
@@ -197,7 +397,70 @@ export async function executeLocalTool(
         exitCode,
       };
     }
+    case "webSearch": {
+      const { query, maxResults } = toolInputSchemas.webSearch.parse(input);
+      const res = await apiClient.web.search.$post({
+        json: { query, maxResults },
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Web search failed: ${text}`);
+      }
+      return await res.json();
+    }
+    case "webFetch": {
+      const { url, maxLength } = toolInputSchemas.webFetch.parse(input);
+      const res = await apiClient.web.fetch.$post({
+        json: { url, maxLength },
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Web fetch failed: ${text}`);
+      }
+      return await res.json();
+    }
+    case "gitStatus": {
+      const res = spawnSync("git", ["status", "--short"], {
+        cwd: resolveInsideCwd(".").resolved,
+        encoding: "utf-8",
+      });
+      return {
+        status: res.stdout || res.stderr || "",
+        exitCode: res.status,
+      };
+    }
+    case "gitDiff": {
+      const { path: diffPath } = toolInputSchemas.gitDiff.parse(input);
+      const args = ["diff"];
+      if (diffPath) {
+        args.push(diffPath);
+      }
+      const res = spawnSync("git", args, {
+        cwd: resolveInsideCwd(".").resolved,
+        encoding: "utf-8",
+      });
+      return {
+        diff: res.stdout || res.stderr || "",
+        exitCode: res.status,
+      };
+    }
+    case "gitLog": {
+      const { limit } = toolInputSchemas.gitLog.parse(input);
+      const res = spawnSync("git", ["log", `-${limit}`, "--oneline"], {
+        cwd: resolveInsideCwd(".").resolved,
+        encoding: "utf-8",
+      });
+      return {
+        log: res.stdout || res.stderr || "",
+        exitCode: res.status,
+      };
+    }
     default:
       throw new Error(`Unknown tool: ${toolName}`);
   }
+}
+
+export function getSessionModifiedFiles(): string[] {
+  const cwd = resolveInsideCwd(".").resolved;
+  return Array.from(sessionOriginalContents.keys()).map((p) => relative(cwd, p));
 }
