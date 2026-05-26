@@ -54,6 +54,14 @@ const submitSchema = z.object({
     .min(1),
   mode: modeSchema,
   model: z.string().refine(isSupportedChatModel, "Unsupported model"),
+  globalInstructions: z.string().max(8000).optional(),
+  projectInstructions: z.string().max(8000).optional(),
+  gitBranchName: z.string().max(256).optional(),
+  gitStatus: z.string().max(12000).optional(),
+  gitDiffSummary: z.string().max(12000).optional(),
+  frameworks: z.array(z.string().max(64)).max(20).optional(),
+  packageManager: z.string().max(64).optional(),
+  isTypeScript: z.boolean().optional(),
 });
 
 const submitValidator = zValidator("json", submitSchema, (result, c) => {
@@ -79,7 +87,20 @@ const app = new Hono<AuthenticatedEnv>().post(
   submitValidator,
   async (c) => {
     const userId = c.get("userId");
-    const { id, messages, mode, model } = c.req.valid("json");
+    const {
+      id,
+      messages,
+      mode,
+      model,
+      globalInstructions,
+      projectInstructions,
+      gitBranchName,
+      gitStatus,
+      gitDiffSummary,
+      frameworks,
+      packageManager,
+      isTypeScript,
+    } = c.req.valid("json");
 
     const session = await db.session.findUnique({
       where: { id, userId },
@@ -126,7 +147,17 @@ const app = new Hono<AuthenticatedEnv>().post(
 
     const result = streamText({
       model: resolvedModel.model,
-      system: buildSystemPrompt({ mode }),
+      system: buildSystemPrompt({
+        mode,
+        globalInstructions,
+        projectInstructions,
+        gitBranchName,
+        gitStatus,
+        gitDiffSummary,
+        frameworks,
+        packageManager,
+        isTypeScript,
+      }),
       messages: modelMessages,
       tools,
       providerOptions: resolvedModel.providerOptions,
@@ -144,11 +175,13 @@ const app = new Hono<AuthenticatedEnv>().post(
 
         if (part.type !== "finish") return undefined;
 
+        const usage = part.totalUsage ?? completedUsage;
+
         return {
           mode,
           model,
           durationMs: Date.now() - startTime,
-          ...(completedUsage ? { usage: completedUsage } : {}),
+          ...(usage ? { usage } : {}),
         };
       },
       async onFinish(event) {
@@ -156,12 +189,16 @@ const app = new Hono<AuthenticatedEnv>().post(
 
         if (hasPendingToolCalls(event.responseMessage)) return;
 
-        await db.session.update({
+        const updated = await db.session.update({
           where: { id, userId },
           data: {
             messages: event.messages as unknown as Prisma.InputJsonValue,
           },
         });
+
+        if (!updated) {
+          throw new Error("Failed to update session messages in database");
+        }
 
         if (!completedUsage) return;
 

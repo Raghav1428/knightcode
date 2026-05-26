@@ -280,7 +280,7 @@ function FileMentionMenu({
 
   if (candidates.length === 0) {
     return (
-      <box paddingX={1}>
+      <box paddingX={1} backgroundColor={colors.surface}>
         <text attributes={TextAttributes.DIM}>
           No matching files or folders
         </text>
@@ -289,7 +289,11 @@ function FileMentionMenu({
   }
 
   return (
-    <scrollbox ref={scrollRef} height={visibleHeight}>
+    <scrollbox
+      ref={scrollRef}
+      height={visibleHeight}
+      backgroundColor={colors.surface}
+    >
       {candidates.map((candidate, index) => {
         const isSelected = index === selectedIndex;
 
@@ -300,7 +304,7 @@ function FileMentionMenu({
             paddingX={1}
             height={1}
             overflow="hidden"
-            backgroundColor={isSelected ? colors.selection : undefined}
+            backgroundColor={isSelected ? colors.selection : colors.surface}
             onMouseMove={() => onSelect(index)}
             onMouseDown={() => onExecute(index)}
           >
@@ -325,6 +329,14 @@ function FileMentionMenu({
 type Props = {
   onSubmit: (text: string) => void;
   disabled?: boolean;
+  isCompacting?: boolean;
+  compact?: () => void | Promise<void>;
+  tokenStats?: {
+    inputTokens: number;
+    outputTokens: number;
+    totalCost: number;
+    lastInputTokens?: number;
+  };
 };
 
 export const TEXTAREA_KEY_BINDINGS: KeyBinding[] = [
@@ -334,7 +346,13 @@ export const TEXTAREA_KEY_BINDINGS: KeyBinding[] = [
   { name: "enter", shift: true, action: "newline" },
 ];
 
-export function InputBar({ onSubmit, disabled = false }: Props) {
+export function InputBar({
+  onSubmit,
+  disabled = false,
+  isCompacting = false,
+  compact,
+  tokenStats,
+}: Props) {
   const {
     mode,
     toggleMode,
@@ -478,6 +496,7 @@ export function InputBar({ onSubmit, disabled = false }: Props) {
           reasoningEffort,
           setReasoningEffort,
           sessionId,
+          compact,
         });
       } else {
         textarea.insertText(command.value + " ");
@@ -495,6 +514,7 @@ export function InputBar({ onSubmit, disabled = false }: Props) {
       reasoningEffort,
       setReasoningEffort,
       sessionId,
+      compact,
     ],
   );
 
@@ -703,9 +723,15 @@ export function InputBar({ onSubmit, disabled = false }: Props) {
             }
             keyBindings={TEXTAREA_KEY_BINDINGS}
             onContentChange={handleTextareaContentChange}
-            placeholder={`Ask anything... "Fix a bug in the database"`}
+            placeholder={
+              isCompacting
+                ? "Compacting context... please wait"
+                : disabled
+                  ? "Awaiting confirmation (y/n/a)..."
+                  : `Ask anything... "Fix a bug in the database"`
+            }
           />
-          <StatusBar />
+          <StatusBar tokenStats={tokenStats} />
         </box>
       </box>
     </box>

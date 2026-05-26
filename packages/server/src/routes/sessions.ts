@@ -12,8 +12,18 @@ const createSessionSchema = z.object({
   reasoningEffort: z.enum(["none", "low", "medium", "high", "max"]).optional(),
 });
 
+const MessageSchema = z.object({
+  id: z.string(),
+  role: z.enum(["user", "assistant", "system", "data"]),
+  content: z.string().optional(),
+  parts: z.array(z.any()).optional(),
+  metadata: z.record(z.string(), z.any()).optional(),
+  createdAt: z.union([z.string(), z.number(), z.date()]).optional(),
+});
+
 const updateSessionSchema = z.object({
-  reasoningEffort: z.enum(["none", "low", "medium", "high", "max"]),
+  reasoningEffort: z.enum(["none", "low", "medium", "high", "max"]).optional(),
+  messages: z.array(MessageSchema).optional(),
 });
 
 const createSessionValidator = zValidator(
@@ -89,12 +99,27 @@ const app = new Hono<AuthenticatedEnv>()
   .patch("/:id", updateSessionValidator, async (c) => {
     const id = c.req.param("id");
     const userId = c.get("userId");
-    const { reasoningEffort } = c.req.valid("json");
+    const { reasoningEffort, messages } = c.req.valid("json");
 
     try {
+      const updateData: Prisma.SessionUpdateInput = {};
+      if (reasoningEffort) {
+        updateData.reasoningEffort = reasoningEffort;
+      }
+      if (messages) {
+        const validated = messages.map((msg) => {
+          const parsed = MessageSchema.safeParse(msg);
+          if (!parsed.success) {
+            throw new Error(`Invalid message format: ${parsed.error.message}`);
+          }
+          return parsed.data;
+        });
+        updateData.messages = validated as unknown as Prisma.InputJsonValue;
+      }
+
       const session = await db.session.update({
         where: { id, userId },
-        data: { reasoningEffort },
+        data: updateData,
       });
       return c.json(session);
     } catch (err) {
@@ -104,7 +129,7 @@ const app = new Hono<AuthenticatedEnv>()
       ) {
         return c.json({ error: "Session not found" }, 404);
       }
-      Sentry.logger.error("Failed to update session reasoningEffort", {
+      Sentry.logger.error("Failed to update session properties", {
         sessionId: id,
         error: err,
       });

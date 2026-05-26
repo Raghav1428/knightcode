@@ -27,20 +27,29 @@ export function CommandMenu({
 }: CommandMenuProps) {
   const { colors } = useTheme();
   const filtered = getFilteredCommands(query);
-  const terminalHeight = process.stdout?.rows && process.stdout.rows > 0 ? process.stdout.rows : 24;
+  const terminalHeight =
+    process.stdout?.rows && process.stdout.rows > 0 ? process.stdout.rows : 24;
   const maxMenuHeight = Math.max(2, terminalHeight - 6);
-  const visibleHeight = Math.min(filtered.length, MAX_VISIBLE_ITEMS, maxMenuHeight);
+  const visibleHeight = Math.min(
+    filtered.length,
+    MAX_VISIBLE_ITEMS,
+    maxMenuHeight,
+  );
 
   if (filtered.length === 0) {
     return (
-      <box paddingX={1}>
+      <box paddingX={1} backgroundColor={colors.surface}>
         <text attributes={TextAttributes.DIM}>No matching commands</text>
       </box>
     );
   }
 
   return (
-    <scrollbox ref={scrollRef} height={visibleHeight}>
+    <scrollbox
+      ref={scrollRef}
+      height={visibleHeight}
+      backgroundColor={colors.surface}
+    >
       {filtered.map((cmd, i) => {
         const isSelected = i === selectedIndex;
 
@@ -50,7 +59,7 @@ export function CommandMenu({
             flexDirection="row"
             paddingX={1}
             height={1}
-            backgroundColor={isSelected ? colors.selection : undefined}
+            backgroundColor={isSelected ? colors.selection : colors.surface}
             onMouseMove={() => onSelect(i)}
             onMouseDown={() => onExecute(i)}
           >

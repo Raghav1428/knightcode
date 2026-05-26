@@ -15,6 +15,7 @@ type KeyboardLayerContextValue = {
   push: (id: KeyboardLayerId, responder?: Responder) => void;
   pop: (id: KeyboardLayerId) => void;
   isTopLayer: (id: KeyboardLayerId) => boolean;
+  hasLayer: (id: KeyboardLayerId) => boolean;
   setResponder: (id: KeyboardLayerId, responder: Responder | null) => void;
 };
 
@@ -60,6 +61,13 @@ export function KeyboardLayerProvider({
     [stack],
   );
 
+  const hasLayer = useCallback(
+    (id: KeyboardLayerId) => {
+      return stack.includes(id);
+    },
+    [stack],
+  );
+
   const setResponder = useCallback(
     (id: KeyboardLayerId, responder: Responder | null) => {
       if (responder) {
@@ -88,7 +96,7 @@ export function KeyboardLayerProvider({
 
   return (
     <KeyboardLayerContext.Provider
-      value={{ push, pop, isTopLayer, setResponder }}
+      value={{ push, pop, isTopLayer, hasLayer, setResponder }}
     >
       {children}
     </KeyboardLayerContext.Provider>

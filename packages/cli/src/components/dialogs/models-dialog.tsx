@@ -24,7 +24,9 @@ export const ModelsDialogContent = ({
     [dialog, onSelectModel],
   );
 
-  const initialIndex = currentModel ? Math.max(0, models.indexOf(currentModel)) : 0;
+  const initialIndex = currentModel
+    ? Math.max(0, models.indexOf(currentModel))
+    : 0;
 
   return (
     <DialogSearchList

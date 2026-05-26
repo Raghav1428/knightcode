@@ -19,8 +19,17 @@ function getReasoningColor(level: string, colors: ThemeColors): string {
   }
 }
 
-export function StatusBar() {
-  const { mode, model, reasoningEffort } = usePromptConfig();
+type Props = {
+  tokenStats?: {
+    inputTokens: number;
+    outputTokens: number;
+    totalCost: number;
+    lastInputTokens?: number;
+  };
+};
+
+export function StatusBar({ tokenStats }: Props) {
+  const { mode, model, reasoningEffort, worktreeDisabled } = usePromptConfig();
   const { colors } = useTheme();
 
   const modelDef = findSupportedChatModel(model);
@@ -28,26 +37,88 @@ export function StatusBar() {
     modelDef?.supportsThinking && reasoningEffort !== "none";
   const modelText = model.replace(/:free$/, "");
 
-  return (
-    <box flexDirection="row" gap={1}>
-      <text fg={mode === Mode.PLAN ? colors.planMode : colors.primary}>
-        {mode === Mode.PLAN ? "Plan" : "Build"}
-      </text>
+  const contextLimit = modelDef?.contextWindow || 128000;
+  const lastInputTokens = tokenStats?.lastInputTokens;
 
-      <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>
-        ›
-      </text>
-      <text>{modelText}</text>
-      {showReasoning && (
-        <>
-          <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>
-            •
-          </text>
-          <text fg={getReasoningColor(reasoningEffort, colors)}>
-            ✦ {reasoningEffort}
-          </text>
-        </>
-      )}
+  let contextRemainingElement = null;
+  if (lastInputTokens !== undefined) {
+    const remaining = Math.max(0, contextLimit - lastInputTokens);
+    const percentLeft = Math.round((remaining / contextLimit) * 100);
+    const remainingK = (remaining / 1000).toFixed(0);
+    const limitK = (contextLimit / 1000).toFixed(0);
+
+    let percentColor = colors.success;
+    if (percentLeft <= 30) {
+      percentColor = colors.error;
+    } else if (percentLeft <= 50) {
+      percentColor = colors.primary;
+    }
+
+    contextRemainingElement = (
+      <>
+        <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>
+          •
+        </text>
+        <text fg={colors.dimSeparator}>ctx: </text>
+        <text fg={percentColor}>{percentLeft}%</text>
+        <text fg={colors.dimSeparator}>
+          ({remainingK}k/{limitK}k left)
+        </text>
+      </>
+    );
+  }
+
+  return (
+    <box flexDirection="row" gap={1} width="100%">
+      <box flexDirection="row" gap={1}>
+        <text fg={mode === Mode.PLAN ? colors.planMode : colors.primary}>
+          {mode === Mode.PLAN ? "Plan" : "Build"}
+        </text>
+
+        <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>
+          ›
+        </text>
+        <text>{modelText}</text>
+        {showReasoning && (
+          <>
+            <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>
+              •
+            </text>
+            <text fg={getReasoningColor(reasoningEffort, colors)}>
+              ✦ {reasoningEffort}
+            </text>
+          </>
+        )}
+
+        {tokenStats &&
+          (tokenStats.inputTokens > 0 || tokenStats.outputTokens > 0) && (
+            <>
+              <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>
+                •
+              </text>
+              <text fg={colors.info}>
+                {tokenStats.totalCost > 0
+                  ? `$${tokenStats.totalCost.toFixed(4)}`
+                  : "Free"}{" "}
+                (
+                {(
+                  (tokenStats.inputTokens + tokenStats.outputTokens) /
+                  1000
+                ).toFixed(1)}
+                k tkn)
+              </text>
+            </>
+          )}
+
+        {contextRemainingElement}
+      </box>
+
+      <box flexDirection="row" gap={1} marginLeft="auto">
+        <text fg={colors.dimSeparator}>wt: </text>
+        <text fg={worktreeDisabled ? colors.planMode : colors.success}>
+          {worktreeDisabled ? "direct" : "isolated"}
+        </text>
+      </box>
     </box>
   );
 }
