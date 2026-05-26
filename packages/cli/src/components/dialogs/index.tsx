@@ -5,4 +5,4 @@ export { ThemeDialogContent } from "./theme-dialog";
 export { ReasoningDialogContent } from "./reasoning-dialog";
 export { MemoryDialogContent } from "./memory-dialog";
 export { DiffDialogContent } from "./diff-dialog";
-
+export { AllowDialogContent } from "./allow-dialog";

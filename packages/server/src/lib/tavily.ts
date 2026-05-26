@@ -20,6 +20,7 @@ export async function searchTavily(
 
   const response = await fetch("https://api.tavily.com/search", {
     method: "POST",
+    signal: AbortSignal.timeout(15_000),
     headers: {
       "Content-Type": "application/json",
     },
@@ -41,7 +42,8 @@ export async function searchTavily(
   const data = (await response.json()) as any;
 
   // Map to clean format to avoid token bloat
-  const cleanResults = (data.results || []).map((r: any) => ({
+  const rawResults = Array.isArray(data?.results) ? data.results : [];
+  const cleanResults = rawResults.map((r: any) => ({
     title: r.title || "",
     url: r.url || "",
     content: r.content || "",

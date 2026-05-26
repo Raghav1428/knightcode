@@ -13,7 +13,8 @@ export function loadGitContext(): GitContext {
     cwd,
     encoding: "utf-8",
   });
-  const branchName = branchResult.status === 0 ? branchResult.stdout.trim() : "unknown";
+  const branchName =
+    branchResult.status === 0 ? branchResult.stdout.trim() : "unknown";
 
   const statusResult = spawnSync("git", ["status", "--short"], {
     cwd,

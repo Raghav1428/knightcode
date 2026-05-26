@@ -31,6 +31,8 @@ export type ChatMessageMetadata = {
   isCompaction?: boolean;
   credits?: number;
   originalMessageCount?: number;
+  summaryCount?: number;
+  preservedCount?: number;
 };
 
 type ChatTools = {
@@ -208,38 +210,44 @@ export function useChat(sessionId: string, initialMessages: Message[]) {
     },
     [pendingConfirmations],
   );
-function estimateTokensForText(text: string): number {
-  if (!text) return 0;
-  return Math.ceil(text.length / 3.5);
-}
+  function estimateTokensForText(text: string): number {
+    if (!text) return 0;
+    return Math.ceil(text.length / 3.5);
+  }
 
-function estimateTokensForMessages(messages: any[]): number {
-  let tokens = 0;
-  for (const msg of messages) {
-    if (!msg) continue;
-    if (typeof msg.content === "string") {
-      tokens += estimateTokensForText(msg.content);
-    }
-    if (Array.isArray(msg.parts)) {
-      for (const part of msg.parts) {
-        if (!part) continue;
-        if (part.type === "text" && typeof part.text === "string") {
-          tokens += estimateTokensForText(part.text);
-        } else if (part.type === "reasoning" && typeof part.text === "string") {
-          tokens += estimateTokensForText(part.text);
-        } else if (part.type === "dynamic-tool" || part.type.startsWith("tool-")) {
-          if (part.input) {
-            tokens += estimateTokensForText(JSON.stringify(part.input));
-          }
-          if (part.output) {
-            tokens += estimateTokensForText(JSON.stringify(part.output));
+  function estimateTokensForMessages(messages: any[]): number {
+    let tokens = 0;
+    for (const msg of messages) {
+      if (!msg) continue;
+      if (typeof msg.content === "string") {
+        tokens += estimateTokensForText(msg.content);
+      }
+      if (Array.isArray(msg.parts)) {
+        for (const part of msg.parts) {
+          if (!part) continue;
+          if (part.type === "text" && typeof part.text === "string") {
+            tokens += estimateTokensForText(part.text);
+          } else if (
+            part.type === "reasoning" &&
+            typeof part.text === "string"
+          ) {
+            tokens += estimateTokensForText(part.text);
+          } else if (
+            part.type === "dynamic-tool" ||
+            part.type.startsWith("tool-")
+          ) {
+            if (part.input) {
+              tokens += estimateTokensForText(JSON.stringify(part.input));
+            }
+            if (part.output) {
+              tokens += estimateTokensForText(JSON.stringify(part.output));
+            }
           }
         }
       }
     }
+    return tokens;
   }
-  return tokens;
-}
 
   const compactHistory = useCallback(
     async (force = false, targetModelId?: SupportedChatModelId) => {
@@ -254,10 +262,11 @@ function estimateTokensForMessages(messages: any[]): number {
       const limit = modelDef?.contextWindow || 128000;
 
       if (!force) {
-        const lastUsage = currentMessages.findLast((m) => m.metadata?.usage)?.metadata?.usage;
-        
+        const lastUsage = currentMessages.findLast((m) => m.metadata?.usage)
+          ?.metadata?.usage;
+
         if (lastUsage && lastUsage.inputTokens) {
-          if (lastUsage.inputTokens < 0.80 * limit) {
+          if (lastUsage.inputTokens < 0.8 * limit) {
             return;
           }
         } else {
@@ -269,233 +278,263 @@ function estimateTokensForMessages(messages: any[]): number {
 
       setIsCompacting(true);
       try {
-        const activeMode = currentMessages.findLast((m) => m.metadata?.mode)?.metadata?.mode ?? "BUILD";
+        const activeMode =
+          currentMessages.findLast((m) => m.metadata?.mode)?.metadata?.mode ??
+          "BUILD";
 
-      try {
-        const res = await apiClient.compact.$post({
-          json: {
-            id: sessionId,
-            messages: currentMessages as any[],
-            model: activeModelId,
-            mode: activeMode,
-          },
-        });
-
-        if (res.ok) {
-          const { compactedMessages, credits } = await res.json();
-          chatRef.current.setMessages(compactedMessages);
-          
-          toast.show({
-            variant: "success",
-            message: `Context compacted. Billed: ${credits} credits.`,
+        try {
+          const res = await apiClient.compact.$post({
+            json: {
+              id: sessionId,
+              messages: currentMessages as any[],
+              model: activeModelId,
+              mode: activeMode,
+            },
           });
-          return;
-        } else {
-          const errText = await res.text();
-          console.error("Compaction failed on server, falling back to naive compaction:", errText);
-        }
-      } catch (err) {
-        console.error("Compaction error, falling back to naive compaction:", err);
-      }
 
-      // --- FALLBACK NAIVE COMPACTION ---
-      // 1. Identify the last 5 unique read or modified files
-      const accessedFiles: string[] = [];
-      const seenFiles = new Set<string>();
+          if (res.ok) {
+            const { compactedMessages, credits } = await res.json();
+            chatRef.current.setMessages(compactedMessages);
 
-      // Traverse messages backwards to collect file access order
-      for (let i = currentMessages.length - 1; i >= 0; i--) {
-        const msg = currentMessages[i];
-        if (!msg || !msg.parts) continue;
-        for (let j = msg.parts.length - 1; j >= 0; j--) {
-          const part = msg.parts[j] as any;
-          if (!part) continue;
-          const toolName =
-            part.type === "dynamic-tool"
-              ? part.toolName
-              : part.type?.startsWith("tool-")
-                ? part.type.slice("tool-".length)
-                : null;
-
-          if (
-            toolName === "readFile" ||
-            toolName === "writeFile" ||
-            toolName === "editFile"
-          ) {
-            const filePath = part.input?.path;
-            if (filePath && typeof filePath === "string" && !seenFiles.has(filePath)) {
-              seenFiles.add(filePath);
-              accessedFiles.push(filePath);
-            }
+            toast.show({
+              variant: "success",
+              message: `Context compacted. Billed: ${credits} credits.`,
+            });
+            return;
+          } else {
+            const errText = await res.text();
+            console.error(
+              "Compaction failed on server, falling back to naive compaction:",
+              errText,
+            );
           }
-        }
-      }
-
-      // Merge files from getSessionModifiedFiles to prioritize session edits
-      const modifiedFiles = getSessionModifiedFiles();
-      for (const filePath of modifiedFiles) {
-        if (!seenFiles.has(filePath)) {
-          seenFiles.add(filePath);
-          accessedFiles.unshift(filePath);
-        }
-      }
-
-      // Preserve the last 5 unique files
-      const preservedFiles = new Set(accessedFiles.slice(0, 5));
-
-      // 2. Compact messages
-      const compacted = currentMessages.map((msg, index) => {
-        // Keep the last 5 messages completely intact
-        if (index >= currentMessages.length - 5) {
-          return msg;
-        }
-
-        // Check if this message contains ONLY read-only search/status tool calls
-        if (msg.role === "assistant") {
-          const hasText = msg.parts.some(
-            (part) => part.type === "text" && part.text.trim().length > 0,
+        } catch (err) {
+          console.error(
+            "Compaction error, falling back to naive compaction:",
+            err,
           );
-
-          if (!hasText) {
-            const toolNames: string[] = [];
-            let onlySearchTools = true;
-
-            for (const part of msg.parts) {
-              if (part.type === "dynamic-tool" || part.type.startsWith("tool-")) {
-                const toolPart = part as any;
-                const toolName =
-                  part.type === "dynamic-tool"
-                    ? part.toolName
-                    : part.type.slice("tool-".length);
-
-                if (
-                  ["glob", "grep", "gitStatus", "gitDiff", "gitLog"].includes(toolName)
-                ) {
-                  toolNames.push(toolName);
-                } else {
-                  onlySearchTools = false;
-                  break;
-                }
-              } else if (part.type !== "reasoning") {
-                onlySearchTools = false;
-                break;
-              }
-            }
-
-            if (onlySearchTools && toolNames.length > 0) {
-              // Collapse this search turn into a single text placeholder part
-              return {
-                ...msg,
-                parts: [
-                  {
-                    type: "text" as const,
-                    text: `[Search executed: ${toolNames.join(", ")}]`,
-                  },
-                ],
-              };
-            }
-          }
         }
 
-        // For other messages, compact individual tool outputs
-        const nextParts = msg.parts.map((part) => {
-          if (
-            part.type === "dynamic-tool" ||
-            part.type.startsWith("tool-")
-          ) {
-            const toolPart = part as any;
+        // --- FALLBACK NAIVE COMPACTION ---
+        // 1. Identify the last 5 unique read or modified files
+        const accessedFiles: string[] = [];
+        const seenFiles = new Set<string>();
+
+        // Traverse messages backwards to collect file access order
+        for (let i = currentMessages.length - 1; i >= 0; i--) {
+          const msg = currentMessages[i];
+          if (!msg || !msg.parts) continue;
+          for (let j = msg.parts.length - 1; j >= 0; j--) {
+            const part = msg.parts[j] as any;
+            if (!part) continue;
             const toolName =
               part.type === "dynamic-tool"
                 ? part.toolName
-                : part.type.slice("tool-".length);
+                : part.type?.startsWith("tool-")
+                  ? part.type.slice("tool-".length)
+                  : null;
 
-            // Preserve file write/edit/read contents for the 5 most recent files
             if (
-              (toolName === "editFile" || toolName === "writeFile" || toolName === "readFile") &&
-              toolPart.input?.path &&
-              preservedFiles.has(toolPart.input.path)
+              toolName === "readFile" ||
+              toolName === "writeFile" ||
+              toolName === "editFile"
             ) {
-              return part;
-            }
-
-            // Preserve bash outputs for failed commands
-            if (
-              toolName === "bash" &&
-              toolPart.output?.exitCode !== undefined &&
-              toolPart.output?.exitCode !== 0
-            ) {
-              return part;
-            }
-
-            // Clear output of other tools
-            if (toolPart.output) {
-              const output = toolPart.output;
-              if (typeof output === "object") {
-                if (typeof output.content === "string") {
-                  const lineCount = output.content.split("\n").length;
-                  return {
-                    ...part,
-                    output: {
-                      ...output,
-                      content: `[Tool Output Cleared: ${lineCount} lines]`,
-                      truncated: true,
-                    },
-                  };
-                }
-                if (
-                  typeof output.stdout === "string" ||
-                  typeof output.stderr === "string"
-                ) {
-                  const stdoutLines = (output.stdout || "").split("\n").length;
-                  const stderrLines = (output.stderr || "").split("\n").length;
-                  return {
-                    ...part,
-                    output: {
-                      ...output,
-                      stdout: `[Tool Output Cleared: ${stdoutLines} lines]`,
-                      stderr: `[Tool Output Cleared: ${stderrLines} lines]`,
-                    },
-                  };
-                }
+              const filePath = part.input?.path;
+              if (
+                filePath &&
+                typeof filePath === "string" &&
+                !seenFiles.has(filePath)
+              ) {
+                seenFiles.add(filePath);
+                accessedFiles.push(filePath);
               }
             }
           }
-          return part;
+        }
+
+        // Merge files from getSessionModifiedFiles to prioritize session edits
+        const modifiedFiles = getSessionModifiedFiles(sessionId);
+        for (const filePath of modifiedFiles) {
+          if (!seenFiles.has(filePath)) {
+            seenFiles.add(filePath);
+            accessedFiles.unshift(filePath);
+          }
+        }
+
+        // Preserve the last 5 unique files
+        const preservedFiles = new Set(accessedFiles.slice(0, 5));
+
+        // 2. Compact messages
+        const compacted = currentMessages.map((msg, index) => {
+          // Keep the last 5 messages completely intact
+          if (index >= currentMessages.length - 5) {
+            return msg;
+          }
+
+          // Check if this message contains ONLY read-only search/status tool calls
+          if (msg.role === "assistant") {
+            const hasText = msg.parts.some(
+              (part) => part.type === "text" && part.text.trim().length > 0,
+            );
+
+            if (!hasText) {
+              const toolNames: string[] = [];
+              let onlySearchTools = true;
+
+              for (const part of msg.parts) {
+                if (
+                  part.type === "dynamic-tool" ||
+                  part.type.startsWith("tool-")
+                ) {
+                  const toolPart = part as any;
+                  const toolName =
+                    part.type === "dynamic-tool"
+                      ? part.toolName
+                      : part.type.slice("tool-".length);
+
+                  if (
+                    ["glob", "grep", "gitStatus", "gitDiff", "gitLog"].includes(
+                      toolName,
+                    )
+                  ) {
+                    toolNames.push(toolName);
+                  } else {
+                    onlySearchTools = false;
+                    break;
+                  }
+                } else if (part.type !== "reasoning") {
+                  onlySearchTools = false;
+                  break;
+                }
+              }
+
+              if (onlySearchTools && toolNames.length > 0) {
+                // Collapse this search turn into a single text placeholder part
+                return {
+                  ...msg,
+                  parts: [
+                    {
+                      type: "text" as const,
+                      text: `[Search executed: ${toolNames.join(", ")}]`,
+                    },
+                  ],
+                };
+              }
+            }
+          }
+
+          // For other messages, compact individual tool outputs
+          const nextParts = msg.parts.map((part) => {
+            if (part.type === "dynamic-tool" || part.type.startsWith("tool-")) {
+              const toolPart = part as any;
+              const toolName =
+                part.type === "dynamic-tool"
+                  ? part.toolName
+                  : part.type.slice("tool-".length);
+
+              // Preserve file write/edit/read contents for the 5 most recent files
+              if (
+                (toolName === "editFile" ||
+                  toolName === "writeFile" ||
+                  toolName === "readFile") &&
+                toolPart.input?.path &&
+                preservedFiles.has(toolPart.input.path)
+              ) {
+                return part;
+              }
+
+              // Preserve bash outputs for failed commands
+              if (
+                toolName === "bash" &&
+                toolPart.output?.exitCode !== undefined &&
+                toolPart.output?.exitCode !== 0
+              ) {
+                return part;
+              }
+
+              // Clear output of other tools
+              if (toolPart.output) {
+                const output = toolPart.output;
+                if (typeof output === "object") {
+                  if (typeof output.content === "string") {
+                    const lineCount = output.content.split("\n").length;
+                    return {
+                      ...part,
+                      output: {
+                        ...output,
+                        content: `[Tool Output Cleared: ${lineCount} lines]`,
+                        truncated: true,
+                      },
+                    };
+                  }
+                  if (
+                    typeof output.stdout === "string" ||
+                    typeof output.stderr === "string"
+                  ) {
+                    const stdoutLines = (output.stdout || "").split(
+                      "\n",
+                    ).length;
+                    const stderrLines = (output.stderr || "").split(
+                      "\n",
+                    ).length;
+                    return {
+                      ...part,
+                      output: {
+                        ...output,
+                        stdout: `[Tool Output Cleared: ${stdoutLines} lines]`,
+                        stderr: `[Tool Output Cleared: ${stderrLines} lines]`,
+                      },
+                    };
+                  }
+                }
+              }
+            }
+            return part;
+          });
+
+          return {
+            ...msg,
+            parts: nextParts,
+          };
         });
 
-        return {
-          ...msg,
-          parts: nextParts,
-        };
-      });
+        const wasCompacted =
+          JSON.stringify(currentMessages) !== JSON.stringify(compacted);
 
-      const wasCompacted = JSON.stringify(currentMessages) !== JSON.stringify(compacted);
+        if (wasCompacted) {
+          // Update the token usage metadata of the last assistant message in the compacted array
+          // to our estimated compacted tokens count, keeping the status bar accurate.
+          const estimatedTokens = 1500 + estimateTokensForMessages(compacted);
+          const lastAssistantMessage = [...compacted]
+            .reverse()
+            .find((m) => m.role === "assistant");
+          if (lastAssistantMessage) {
+            // Zero out metadata.usage on all other compacted messages that are no longer billable
+            for (const msg of compacted) {
+              if (msg !== lastAssistantMessage && msg.metadata) {
+                delete msg.metadata.usage;
+              }
+            }
 
-      if (wasCompacted) {
-        // Update the token usage metadata of the last assistant message in the compacted array
-        // to our estimated compacted tokens count, keeping the status bar accurate.
-        const estimatedTokens = 1500 + estimateTokensForMessages(compacted);
-        const lastAssistantMessage = [...compacted].reverse().find(
-          (m) => m.role === "assistant",
-        );
-        if (lastAssistantMessage) {
-          if (!lastAssistantMessage.metadata) {
-            lastAssistantMessage.metadata = {};
+            if (!lastAssistantMessage.metadata) {
+              lastAssistantMessage.metadata = {};
+            }
+            lastAssistantMessage.metadata.usage = {
+              inputTokens: estimatedTokens,
+              outputTokens:
+                lastAssistantMessage.metadata.usage?.outputTokens ?? 0,
+            } as any;
           }
-          lastAssistantMessage.metadata.usage = {
-            inputTokens: estimatedTokens,
-            outputTokens: lastAssistantMessage.metadata.usage?.outputTokens ?? 0,
-          } as any;
-        }
 
-        chatRef.current.setMessages(compacted);
-        if (!force) {
-          toast.show({
-            variant: "success",
-            message: "Chat history automatically compacted to save context window.",
-          });
+          chatRef.current.setMessages(compacted);
+          if (!force) {
+            toast.show({
+              variant: "success",
+              message:
+                "Chat history automatically compacted to save context window.",
+            });
+          }
         }
-      }
 
         try {
           await apiClient.sessions[":id"].$patch({
@@ -571,6 +610,9 @@ function estimateTokensForMessages(messages: any[]): number {
           }),
         );
     },
+    onFinish({ message }) {
+      void compactHistory(false, message.metadata?.model as any);
+    },
     sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
   });
   chatRef.current = chat;
@@ -589,7 +631,6 @@ function estimateTokensForMessages(messages: any[]): number {
       mode: ModeType;
       model: SupportedChatModelId;
     }) => {
-      await compactHistory(false, params.model);
       return chat.sendMessage({
         text: params.userText,
         metadata: {

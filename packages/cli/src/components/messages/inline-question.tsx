@@ -20,7 +20,9 @@ export function InlineQuestion({
 }: Props) {
   const { colors } = useTheme();
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
+  const [selectedIndices, setSelectedIndices] = useState<Set<number>>(
+    new Set(),
+  );
   const [isWritingCustom, setIsWritingCustom] = useState(false);
   const customInputRef = useRef<InputRenderable>(null);
 
@@ -32,14 +34,24 @@ export function InlineQuestion({
     if (isMultiSelect) {
       const selected = allOptions.filter((_, idx) => selectedIndices.has(idx));
       // If CUSTOM_OPTION is selected and not writing custom, we ignore it
-      onAnswer(toolCallId, selected.filter(s => s !== CUSTOM_OPTION));
+      onAnswer(
+        toolCallId,
+        selected.filter((s) => s !== CUSTOM_OPTION),
+      );
     } else {
       const selected = allOptions[selectedIndex];
       if (selected && selected !== CUSTOM_OPTION) {
         onAnswer(toolCallId, selected);
       }
     }
-  }, [selectedIndex, selectedIndices, allOptions, isMultiSelect, onAnswer, toolCallId]);
+  }, [
+    selectedIndex,
+    selectedIndices,
+    allOptions,
+    isMultiSelect,
+    onAnswer,
+    toolCallId,
+  ]);
 
   useKeyboard((key) => {
     if (isWritingCustom) {
@@ -52,7 +64,10 @@ export function InlineQuestion({
         if (customValue) {
           if (isMultiSelect) {
             // Add custom value to multi-select answers
-            const currentSelected = allOptions.filter((_, idx) => selectedIndices.has(idx) && idx !== allOptions.length - 1);
+            const currentSelected = allOptions.filter(
+              (_, idx) =>
+                selectedIndices.has(idx) && idx !== allOptions.length - 1,
+            );
             onAnswer(toolCallId, [...currentSelected, customValue]);
           } else {
             onAnswer(toolCallId, customValue);
@@ -67,7 +82,9 @@ export function InlineQuestion({
       setSelectedIndex((prev) => (prev + 1) % allOptions.length);
     } else if (key.name === "up" || key.name === "k") {
       key.preventDefault();
-      setSelectedIndex((prev) => (prev - 1 + allOptions.length) % allOptions.length);
+      setSelectedIndex(
+        (prev) => (prev - 1 + allOptions.length) % allOptions.length,
+      );
     } else if (key.name === "space") {
       key.preventDefault();
       if (isMultiSelect) {

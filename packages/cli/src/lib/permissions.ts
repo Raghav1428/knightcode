@@ -10,6 +10,21 @@ function getPermissionsPath(): string {
   return join(homedir(), ".knightcode", "permissions.json");
 }
 
+function normalizePermissions(input: unknown): PermissionsSchema {
+  if (
+    input &&
+    typeof input === "object" &&
+    Array.isArray((input as PermissionsSchema).allowedCommands)
+  ) {
+    return {
+      allowedCommands: (input as PermissionsSchema).allowedCommands.filter(
+        (v): v is string => typeof v === "string",
+      ),
+    };
+  }
+  return { allowedCommands: [] };
+}
+
 export function loadPermissions(): PermissionsSchema {
   const filePath = getPermissionsPath();
   if (!existsSync(filePath)) {
@@ -17,7 +32,17 @@ export function loadPermissions(): PermissionsSchema {
   }
   try {
     const content = readFileSync(filePath, "utf-8");
-    return JSON.parse(content);
+    const parsed = JSON.parse(content);
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      !Array.isArray(parsed.allowedCommands)
+    ) {
+      throw new Error(
+        "Invalid permissions schema: allowedCommands must be an array",
+      );
+    }
+    return normalizePermissions(parsed);
   } catch {
     return { allowedCommands: [] };
   }
@@ -36,9 +61,10 @@ export function savePermissions(permissions: PermissionsSchema): void {
 
 export function isCommandAllowed(command: string): boolean {
   const permissions = loadPermissions();
-  // Check if command starts with any allowed command prefix
+
+  const normalised = command.trim();
   return permissions.allowedCommands.some((allowed) => {
-    return command.trim().startsWith(allowed.trim());
+    return normalised === allowed.trim();
   });
 }
 

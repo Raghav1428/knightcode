@@ -6,6 +6,7 @@ import {
   ReasoningDialogContent,
   MemoryDialogContent,
   DiffDialogContent,
+  AllowDialogContent,
 } from "../dialogs";
 import { undoSessionChanges } from "../../lib/local-tools";
 import {
@@ -35,6 +36,17 @@ export const COMMANDS: Command[] = [
             onSelectMode={ctx.setMode}
           />
         ),
+      });
+    },
+  },
+  {
+    name: "allow",
+    description: "Manage allowed commands (for automatic execution)",
+    value: "/allow",
+    action: (ctx) => {
+      ctx.dialog.open({
+        title: "Allowed Commands",
+        children: <AllowDialogContent />,
       });
     },
   },
@@ -290,11 +302,18 @@ export const COMMANDS: Command[] = [
     value: "/undo",
     action: async (ctx) => {
       try {
-        const { revertedFiles } = await undoSessionChanges();
-        if (revertedFiles.length === 0) {
+        const sessionId = ctx.sessionId ?? "default";
+        const { revertedFiles, failedFiles } =
+          await undoSessionChanges(sessionId);
+        if (revertedFiles.length === 0 && failedFiles.length === 0) {
           ctx.toast.show({
             variant: "info",
             message: "No files modified in this session to revert.",
+          });
+        } else if (failedFiles.length > 0) {
+          ctx.toast.show({
+            variant: "error",
+            message: `Failed to revert: ${failedFiles.join(", ")}. Reverted: ${revertedFiles.join(", ")}`,
           });
         } else {
           ctx.toast.show({

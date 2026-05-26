@@ -60,7 +60,10 @@ const renderer = await createCliRenderer({
 });
 createRoot(renderer).render(<App />);
 
-import { cleanupAllProcesses, monitorProcessesHeartbeat } from "./lib/background-tasks";
+import {
+  cleanupAllProcesses,
+  monitorProcessesHeartbeat,
+} from "./lib/background-tasks";
 
 // Start process heartbeat monitor
 const heartbeatTimer = setInterval(() => {
@@ -77,4 +80,3 @@ function handleExit() {
 process.on("exit", () => cleanupAllProcesses());
 process.on("SIGINT", handleExit);
 process.on("SIGTERM", handleExit);
-

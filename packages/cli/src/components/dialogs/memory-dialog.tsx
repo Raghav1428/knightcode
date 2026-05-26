@@ -24,13 +24,23 @@ export function MemoryDialogContent() {
     try {
       // Ensure file exists
       if (!existsSync(localPath)) {
-        writeFileSync(localPath, "# Project Memory: KnightCode Guidelines\n\n## Project Rules\n", "utf-8");
+        writeFileSync(
+          localPath,
+          "# Project Memory: KnightCode Guidelines\n\n## Project Rules\n",
+          "utf-8",
+        );
       }
       appendFileSync(localPath, `\n- ${text}\n`, "utf-8");
-      toast.show({ variant: "success", message: "Added rule to KNIGHTCODE.md!" });
+      toast.show({
+        variant: "success",
+        message: "Added rule to KNIGHTCODE.md!",
+      });
       dialog.close();
     } catch (err) {
-      toast.show({ variant: "error", message: `Failed to save: ${(err as Error).message}` });
+      toast.show({
+        variant: "error",
+        message: `Failed to save: ${(err as Error).message}`,
+      });
     }
   }, [dialog, toast]);
 

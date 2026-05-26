@@ -8,7 +8,13 @@ type ReasoningDialogContentProps = {
   onSelectEffort: (effort: ReasoningEffortLevel) => void;
 };
 
-const OPTIONS: ReasoningEffortLevel[] = ["none", "low", "medium", "high", "max"];
+const OPTIONS: ReasoningEffortLevel[] = [
+  "none",
+  "low",
+  "medium",
+  "high",
+  "max",
+];
 
 export const ReasoningDialogContent = ({
   currentEffort,

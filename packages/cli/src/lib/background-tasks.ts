@@ -1,28 +1,51 @@
-import { spawnSync, execSync } from "child_process";
+import { spawnSync } from "child_process";
 import fs from "fs";
 import path from "path";
 
-const PROCESSES_FILE = path.join(process.cwd(), ".knightcode", "processes.json");
+const PROCESSES_FILE = path.join(
+  process.cwd(),
+  ".knightcode",
+  "processes.json",
+);
 const activeProcesses = new Map<number, any>();
 
 export function killProcessOnPort(port: number) {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    return;
+  }
   try {
     if (process.platform === "win32") {
-      const output = execSync(`netstat -ano | findstr :${port}`, { encoding: "utf-8" });
+      const res = spawnSync("netstat", ["-ano"], { encoding: "utf-8" });
+      const output = res.stdout || "";
       const lines = output.trim().split("\n");
+      const targetSearch = `:${port}`;
       for (const line of lines) {
+        if (!line.includes(targetSearch)) continue;
         const parts = line.trim().split(/\s+/);
         const pid = parts[parts.length - 1];
-        if (pid && /^\d+$/.test(pid) && pid !== "0" && pid !== String(process.pid)) {
-          execSync(`taskkill /F /PID ${pid}`);
+        if (
+          pid &&
+          /^\d+$/.test(pid) &&
+          pid !== "0" &&
+          pid !== String(process.pid)
+        ) {
+          spawnSync("taskkill", ["/F", "/PID", pid]);
         }
       }
     } else {
-      const output = execSync(`lsof -t -i:${port}`, { encoding: "utf-8" });
+      const res = spawnSync("lsof", ["-t", `-i:${port}`], {
+        encoding: "utf-8",
+      });
+      const output = res.stdout || "";
       const pids = output.trim().split("\n");
       for (const pid of pids) {
-        if (pid && pid !== String(process.pid)) {
-          execSync(`kill -9 ${pid}`);
+        const trimmedPid = pid.trim();
+        if (
+          trimmedPid &&
+          /^\d+$/.test(trimmedPid) &&
+          trimmedPid !== String(process.pid)
+        ) {
+          spawnSync("kill", ["-9", trimmedPid]);
         }
       }
     }
@@ -58,11 +81,20 @@ export function loadRegistry(): Record<string, BackgroundProcess> {
 export function saveRegistry(registry: Record<string, BackgroundProcess>) {
   try {
     ensureDirExists(PROCESSES_FILE);
-    fs.writeFileSync(PROCESSES_FILE, JSON.stringify(registry, null, 2), "utf-8");
+    fs.writeFileSync(
+      PROCESSES_FILE,
+      JSON.stringify(registry, null, 2),
+      "utf-8",
+    );
   } catch {}
 }
 
-export function registerProcess(pid: number, command: string, port?: number, proc?: any) {
+export function registerProcess(
+  pid: number,
+  command: string,
+  port?: number,
+  proc?: any,
+) {
   const registry = loadRegistry();
   registry[pid] = {
     pid,
@@ -115,9 +147,12 @@ export function cleanupAllProcesses() {
   const registry = loadRegistry();
   for (const pidStr of Object.keys(registry)) {
     const pid = parseInt(pidStr, 10);
+    const pidStrClean = String(pid);
+    if (!/^\d+$/.test(pidStrClean)) continue;
+
     try {
       if (process.platform === "win32") {
-        execSync(`taskkill /PID ${pid}`);
+        spawnSync("taskkill", ["/PID", pidStrClean]);
       } else {
         process.kill(pid, "SIGTERM");
       }
@@ -125,7 +160,7 @@ export function cleanupAllProcesses() {
 
     try {
       if (process.platform === "win32") {
-        execSync(`taskkill /F /PID ${pid}`);
+        spawnSync("taskkill", ["/F", "/PID", pidStrClean]);
       } else {
         process.kill(pid, "SIGKILL");
       }

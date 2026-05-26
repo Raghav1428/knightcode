@@ -27,9 +27,14 @@ export function CommandMenu({
 }: CommandMenuProps) {
   const { colors } = useTheme();
   const filtered = getFilteredCommands(query);
-  const terminalHeight = process.stdout?.rows && process.stdout.rows > 0 ? process.stdout.rows : 24;
+  const terminalHeight =
+    process.stdout?.rows && process.stdout.rows > 0 ? process.stdout.rows : 24;
   const maxMenuHeight = Math.max(2, terminalHeight - 6);
-  const visibleHeight = Math.min(filtered.length, MAX_VISIBLE_ITEMS, maxMenuHeight);
+  const visibleHeight = Math.min(
+    filtered.length,
+    MAX_VISIBLE_ITEMS,
+    maxMenuHeight,
+  );
 
   if (filtered.length === 0) {
     return (
@@ -40,7 +45,11 @@ export function CommandMenu({
   }
 
   return (
-    <scrollbox ref={scrollRef} height={visibleHeight} backgroundColor={colors.surface}>
+    <scrollbox
+      ref={scrollRef}
+      height={visibleHeight}
+      backgroundColor={colors.surface}
+    >
       {filtered.map((cmd, i) => {
         const isSelected = i === selectedIndex;
 

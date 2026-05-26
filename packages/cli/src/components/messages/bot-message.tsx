@@ -127,13 +127,16 @@ export function BotMessage({
 
               const isEditFile = toolName === "editFile";
               const isAskUserQuestion = toolName === "AskUserQuestion";
-              const editInput = isEditFile && part.input && typeof part.input === "object" ? (part.input as any) : null;
+              const editInput =
+                isEditFile && part.input && typeof part.input === "object"
+                  ? (part.input as any)
+                  : null;
 
               if (isAskUserQuestion) {
                 const isPending = pendingConfirmations.some(
                   (c) => c.toolCallId === part.toolCallId,
                 );
-                if (isPending) {
+                if (isPending && answerQuestion) {
                   const input = part.input as any;
                   return (
                     <InlineQuestion
@@ -142,7 +145,7 @@ export function BotMessage({
                       question={input.question}
                       options={input.options}
                       isMultiSelect={input.isMultiSelect}
-                      onAnswer={answerQuestion!}
+                      onAnswer={answerQuestion}
                     />
                   );
                 } else {
@@ -155,10 +158,15 @@ export function BotMessage({
                       flexDirection="column"
                       marginY={1}
                     >
-                      <text fg="yellow" attributes={TextAttributes.BOLD}>Question: {(part.input as any)?.question}</text>
+                      <text fg="yellow" attributes={TextAttributes.BOLD}>
+                        Question: {(part.input as any)?.question}
+                      </text>
                       {part.state === "output-available" && (
                         <text fg="green">
-                          Answer: {Array.isArray((part.output as any)?.answer) ? (part.output as any).answer.join(", ") : (part.output as any)?.answer}
+                          Answer:{" "}
+                          {Array.isArray((part.output as any)?.answer)
+                            ? (part.output as any).answer.join(", ")
+                            : (part.output as any)?.answer}
                         </text>
                       )}
                     </box>
@@ -166,8 +174,28 @@ export function BotMessage({
                 }
               }
 
-              if (editInput && editInput.oldString !== undefined && editInput.newString !== undefined) {
-                const diffLines = computeLineDiff(editInput.oldString, editInput.newString);
+              if (
+                editInput &&
+                editInput.oldString !== undefined &&
+                editInput.newString !== undefined
+              ) {
+                const maxChars = 10000;
+                const maxLines = 500;
+                const combinedLength =
+                  editInput.oldString.length + editInput.newString.length;
+                const combinedLines =
+                  editInput.oldString.split("\n").length +
+                  editInput.newString.split("\n").length;
+
+                const diffLines =
+                  combinedLength > maxChars || combinedLines > maxLines
+                    ? [
+                        {
+                          type: "unchanged" as const,
+                          content: `[Diff too large to display (${combinedLength} characters, ${combinedLines} lines)]`,
+                        },
+                      ]
+                    : computeLineDiff(editInput.oldString, editInput.newString);
                 const isPending = pendingConfirmations.some(
                   (c) => c.toolCallId === part.toolCallId,
                 );
@@ -182,10 +210,12 @@ export function BotMessage({
                     gap={0}
                     marginY={1}
                   >
-                    <box flexDirection="row" justifyContent="space-between" width="100%">
-                      <text fg="white">
-                        {editInput.path || "file"}
-                      </text>
+                    <box
+                      flexDirection="row"
+                      justifyContent="space-between"
+                      width="100%"
+                    >
+                      <text fg="white">{editInput.path || "file"}</text>
                       {part.state === "output-error" && (
                         <text fg="red">Failed: {part.errorText}</text>
                       )}
@@ -205,7 +235,8 @@ export function BotMessage({
                         }
                         return (
                           <text key={idx} fg={fg}>
-                            {prefix}{line.content}
+                            {prefix}
+                            {line.content}
                           </text>
                         );
                       })}
@@ -213,7 +244,7 @@ export function BotMessage({
                     {isPending && (
                       <box flexDirection="column" gap={0} marginTop={1}>
                         <text fg="yellow" attributes={TextAttributes.BOLD}>
-                          Accept changes? [y] Yes  [n] No  [a] Always
+                          Accept changes? [y] Yes [n] No [a] Always
                         </text>
                       </box>
                     )}

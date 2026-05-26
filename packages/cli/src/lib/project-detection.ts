@@ -9,19 +9,51 @@ export interface ProjectDetection {
   dependencies: string[];
 }
 
-export function detectProjectStackSync(): ProjectDetection {
-  const cwd = process.cwd();
-  const packageJsonPath = join(cwd, "package.json");
-  const tsconfigPath = join(cwd, "tsconfig.json");
-
-  const frameworks: string[] = [];
-  let packageManager = "npm";
-  let isTypeScript = false;
+function parsePackageDependencies(pkg: any): {
+  frameworks: string[];
+  dependencies: string[];
+} {
+  const frameworksSet = new Set<string>();
   const dependencies: string[] = [];
 
-  if (existsSync(tsconfigPath)) {
-    isTypeScript = true;
+  if (pkg && typeof pkg === "object") {
+    const allDeps = {
+      ...(pkg.dependencies || {}),
+      ...(pkg.devDependencies || {}),
+    };
+
+    for (const dep of Object.keys(allDeps)) {
+      dependencies.push(dep);
+      if (dep === "next") frameworksSet.add("Next.js");
+      if (dep === "nuxt" || dep === "vue") frameworksSet.add("Vue/Nuxt");
+      if (dep === "react" && !frameworksSet.has("Next.js"))
+        frameworksSet.add("React");
+      if (dep === "svelte" || dep === "@sveltejs/kit")
+        frameworksSet.add("Svelte");
+      if (dep === "hono") frameworksSet.add("Hono");
+      if (dep === "prisma") frameworksSet.add("Prisma");
+      if (dep === "tailwindcss") frameworksSet.add("TailwindCSS");
+    }
   }
+
+  // Ensure "React" is not included if "Next.js" is in frameworksSet
+  if (frameworksSet.has("Next.js")) {
+    frameworksSet.delete("React");
+  }
+
+  return {
+    frameworks: Array.from(frameworksSet),
+    dependencies,
+  };
+}
+
+function extractDetectorsSync(
+  cwd: string,
+  packageJsonContent: string | null,
+  tsconfigExists: boolean,
+): ProjectDetection {
+  let packageManager = "npm";
+  const isTypeScript = tsconfigExists;
 
   // Detect package manager based on lockfiles
   if (existsSync(join(cwd, "bun.lockb")) || existsSync(join(cwd, "bun.lock"))) {
@@ -34,25 +66,15 @@ export function detectProjectStackSync(): ProjectDetection {
     packageManager = "npm";
   }
 
-  if (existsSync(packageJsonPath)) {
-    try {
-      const content = readFileSync(packageJsonPath, "utf-8");
-      const pkg = JSON.parse(content);
-      const allDeps = {
-        ...(pkg.dependencies || {}),
-        ...(pkg.devDependencies || {}),
-      };
+  let frameworks: string[] = [];
+  let dependencies: string[] = [];
 
-      for (const dep of Object.keys(allDeps)) {
-        dependencies.push(dep);
-        if (dep === "next") frameworks.push("Next.js");
-        if (dep === "nuxt" || dep === "vue") frameworks.push("Vue/Nuxt");
-        if (dep === "react" && !frameworks.includes("Next.js")) frameworks.push("React");
-        if (dep === "svelte" || dep === "@sveltejs/kit") frameworks.push("Svelte");
-        if (dep === "hono") frameworks.push("Hono");
-        if (dep === "prisma") frameworks.push("Prisma");
-        if (dep === "tailwindcss") frameworks.push("TailwindCSS");
-      }
+  if (packageJsonContent) {
+    try {
+      const pkg = JSON.parse(packageJsonContent);
+      const parsed = parsePackageDependencies(pkg);
+      frameworks = parsed.frameworks;
+      dependencies = parsed.dependencies;
     } catch {
       // Ignored
     }
@@ -66,59 +88,34 @@ export function detectProjectStackSync(): ProjectDetection {
   };
 }
 
+export function detectProjectStackSync(): ProjectDetection {
+  const cwd = process.cwd();
+  const packageJsonPath = join(cwd, "package.json");
+  const tsconfigPath = join(cwd, "tsconfig.json");
+
+  let packageJsonContent: string | null = null;
+  if (existsSync(packageJsonPath)) {
+    try {
+      packageJsonContent = readFileSync(packageJsonPath, "utf-8");
+    } catch {}
+  }
+
+  const tsconfigExists = existsSync(tsconfigPath);
+  return extractDetectorsSync(cwd, packageJsonContent, tsconfigExists);
+}
+
 export async function detectProjectStack(): Promise<ProjectDetection> {
   const cwd = process.cwd();
   const packageJsonPath = join(cwd, "package.json");
   const tsconfigPath = join(cwd, "tsconfig.json");
 
-  const frameworks: string[] = [];
-  let packageManager = "npm";
-  let isTypeScript = false;
-  const dependencies: string[] = [];
-
-  if (existsSync(tsconfigPath)) {
-    isTypeScript = true;
-  }
-
-  // Detect package manager based on lockfiles
-  if (existsSync(join(cwd, "bun.lockb")) || existsSync(join(cwd, "bun.lock"))) {
-    packageManager = "bun";
-  } else if (existsSync(join(cwd, "pnpm-lock.yaml"))) {
-    packageManager = "pnpm";
-  } else if (existsSync(join(cwd, "yarn.lock"))) {
-    packageManager = "yarn";
-  } else if (existsSync(join(cwd, "package-lock.json"))) {
-    packageManager = "npm";
-  }
-
+  let packageJsonContent: string | null = null;
   if (existsSync(packageJsonPath)) {
     try {
-      const content = await readFile(packageJsonPath, "utf-8");
-      const pkg = JSON.parse(content);
-      const allDeps = {
-        ...(pkg.dependencies || {}),
-        ...(pkg.devDependencies || {}),
-      };
-
-      for (const dep of Object.keys(allDeps)) {
-        dependencies.push(dep);
-        if (dep === "next") frameworks.push("Next.js");
-        if (dep === "nuxt" || dep === "vue") frameworks.push("Vue/Nuxt");
-        if (dep === "react" && !frameworks.includes("Next.js")) frameworks.push("React");
-        if (dep === "svelte" || dep === "@sveltejs/kit") frameworks.push("Svelte");
-        if (dep === "hono") frameworks.push("Hono");
-        if (dep === "prisma") frameworks.push("Prisma");
-        if (dep === "tailwindcss") frameworks.push("TailwindCSS");
-      }
-    } catch {
-      // Ignored
-    }
+      packageJsonContent = await readFile(packageJsonPath, "utf-8");
+    } catch {}
   }
 
-  return {
-    frameworks,
-    packageManager,
-    isTypeScript,
-    dependencies: dependencies.slice(0, 50), // Cap at 50 to avoid massive payloads
-  };
+  const tsconfigExists = existsSync(tsconfigPath);
+  return extractDetectorsSync(cwd, packageJsonContent, tsconfigExists);
 }

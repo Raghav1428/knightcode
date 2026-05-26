@@ -3,9 +3,13 @@ export interface DiffLine {
   content: string;
 }
 
+function splitLines(value: string): string[] {
+  return value === "" ? [] : value.split("\n");
+}
+
 export function computeLineDiff(oldStr: string, newStr: string): DiffLine[] {
-  const oldLines = oldStr.split("\n");
-  const newLines = newStr.split("\n");
+  const oldLines = splitLines(oldStr);
+  const newLines = splitLines(newStr);
 
   const dp: number[][] = Array(oldLines.length + 1)
     .fill(null)
@@ -21,26 +25,26 @@ export function computeLineDiff(oldStr: string, newStr: string): DiffLine[] {
     }
   }
 
-  const diff: DiffLine[] = [];
+  const revDiff: DiffLine[] = [];
   let i = oldLines.length;
   let j = newLines.length;
 
   while (i > 0 || j > 0) {
     if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
-      diff.unshift({
+      revDiff.push({
         type: "unchanged",
         content: oldLines[i - 1]!,
       });
       i--;
       j--;
     } else if (j > 0 && (i === 0 || dp[i]![j - 1]! >= dp[i - 1]![j]!)) {
-      diff.unshift({
+      revDiff.push({
         type: "added",
         content: newLines[j - 1]!,
       });
       j--;
     } else {
-      diff.unshift({
+      revDiff.push({
         type: "deleted",
         content: oldLines[i - 1]!,
       });
@@ -48,5 +52,6 @@ export function computeLineDiff(oldStr: string, newStr: string): DiffLine[] {
     }
   }
 
-  return diff;
+  revDiff.reverse();
+  return revDiff;
 }

@@ -12,9 +12,18 @@ const createSessionSchema = z.object({
   reasoningEffort: z.enum(["none", "low", "medium", "high", "max"]).optional(),
 });
 
+const MessageSchema = z.object({
+  id: z.string(),
+  role: z.enum(["user", "assistant", "system", "data"]),
+  content: z.string().optional(),
+  parts: z.array(z.any()).optional(),
+  metadata: z.record(z.string(), z.any()).optional(),
+  createdAt: z.union([z.string(), z.number(), z.date()]).optional(),
+});
+
 const updateSessionSchema = z.object({
   reasoningEffort: z.enum(["none", "low", "medium", "high", "max"]).optional(),
-  messages: z.array(z.any()).optional(),
+  messages: z.array(MessageSchema).optional(),
 });
 
 const createSessionValidator = zValidator(
@@ -98,7 +107,14 @@ const app = new Hono<AuthenticatedEnv>()
         updateData.reasoningEffort = reasoningEffort;
       }
       if (messages) {
-        updateData.messages = messages as unknown as Prisma.InputJsonValue;
+        const validated = messages.map((msg) => {
+          const parsed = MessageSchema.safeParse(msg);
+          if (!parsed.success) {
+            throw new Error(`Invalid message format: ${parsed.error.message}`);
+          }
+          return parsed.data;
+        });
+        updateData.messages = validated as unknown as Prisma.InputJsonValue;
       }
 
       const session = await db.session.update({

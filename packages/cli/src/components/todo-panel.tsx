@@ -48,7 +48,12 @@ export function TodoPanel() {
       flexShrink={0}
     >
       {/* Header / Summary Line */}
-      <box flexDirection="row" justifyContent="space-between" width="100%" height={1}>
+      <box
+        flexDirection="row"
+        justifyContent="space-between"
+        width="100%"
+        height={1}
+      >
         <box flexDirection="row" gap={1}>
           <text attributes={TextAttributes.BOLD} fg={colors.primary}>
             Progress
@@ -67,7 +72,9 @@ export function TodoPanel() {
         <box flexDirection="column" gap={0} marginTop={0}>
           {items.map((item) => (
             <box key={item.id} flexDirection="row" gap={1} height={1}>
-              <text fg={statusColor(item.status)}>{statusIcon(item.status)}</text>
+              <text fg={statusColor(item.status)}>
+                {statusIcon(item.status)}
+              </text>
               <text
                 fg={item.status === "completed" ? "gray" : "white"}
                 attributes={

@@ -1,7 +1,8 @@
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
-import { z } from "zod";
 import { convert } from "html-to-text";
+import dns from "node:dns/promises";
+import { z } from "zod";
 import { searchTavily } from "../lib/tavily";
 import type { AuthenticatedEnv } from "../middleware/require-auth";
 import { requireCreditsBalance } from "../middleware/require-credits-balance";
@@ -12,9 +13,32 @@ const searchSchema = z.object({
 });
 
 const fetchSchema = z.object({
-  url: z.string().url(),
-  maxLength: z.number().optional().default(20000),
+  url: z.url(),
+  maxLength: z.number().int().min(1).max(200_000).optional().default(20_000),
 });
+
+function isPrivateIp(ip: string): boolean {
+  // Minimal: expand as needed (RFC1918, loopback, link-local, ULA, etc.)
+  return (
+    ip === "127.0.0.1" ||
+    ip === "::1" ||
+    ip.startsWith("10.") ||
+    ip.startsWith("192.168.") ||
+    ip.startsWith("169.254.") ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(ip)
+  );
+}
+
+async function assertSafeTarget(rawUrl: string) {
+  const u = new URL(rawUrl);
+  if (!["http:", "https:"].includes(u.protocol)) {
+    throw new Error("Only http/https URLs are allowed");
+  }
+  const records = await dns.lookup(u.hostname, { all: true });
+  if (records.some((r) => isPrivateIp(r.address))) {
+    throw new Error("Target host is not allowed");
+  }
+}
 
 const app = new Hono<AuthenticatedEnv>()
   .post(
@@ -53,10 +77,19 @@ const app = new Hono<AuthenticatedEnv>()
           );
         }
         const contentType = response.headers.get("content-type") ?? "";
+        const contentLength = Number(
+          response.headers.get("content-length") ?? "0",
+        );
+        if (contentLength > maxLength * 5) {
+          return c.json({ error: "Response too large to fetch safely" }, 413);
+        }
         const raw = await response.text();
         let text: string;
 
-        if (contentType.includes("text/html") || contentType.includes("xhtml")) {
+        if (
+          contentType.includes("text/html") ||
+          contentType.includes("xhtml")
+        ) {
           text = convert(raw, {
             wordwrap: 120,
             selectors: [

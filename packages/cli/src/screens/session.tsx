@@ -2,10 +2,19 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { useParams, useLocation, useNavigate } from "react-router";
 import { z } from "zod";
 import { useKeyboard } from "@opentui/react";
-import { type ModeType, type SupportedChatModelId, findSupportedChatModel } from "@knightcode/shared";
+import {
+  type ModeType,
+  type SupportedChatModelId,
+  findSupportedChatModel,
+} from "@knightcode/shared";
 import type { InferResponseType } from "hono/client";
 import { SessionShell } from "../components/session-shell";
-import { UserMessage, BotMessage, ErrorMessage, CompactionMessage } from "../components/messages";
+import {
+  UserMessage,
+  BotMessage,
+  ErrorMessage,
+  CompactionMessage,
+} from "../components/messages";
 import { useToast } from "../providers/toast";
 import { useChat } from "../hooks/use-chat";
 import { usePromptConfig } from "../providers/prompt-config";
@@ -55,6 +64,8 @@ function ChatMessage({
           credits={msg.metadata.credits ?? 0}
           originalMessageCount={msg.metadata.originalMessageCount ?? 0}
           summary={text}
+          summaryCount={msg.metadata.summaryCount}
+          preservedCount={msg.metadata.preservedCount}
         />
       );
     }
@@ -118,8 +129,8 @@ function SessionChat({
             part.type === "dynamic-tool"
               ? (part as any).toolName
               : part.type.startsWith("tool-")
-              ? part.type.slice("tool-".length)
-              : null;
+                ? part.type.slice("tool-".length)
+                : null;
 
           if (toolName === "todoWrite" && (part as any).input?.items) {
             foundItems = (part as any).input.items;
@@ -146,7 +157,10 @@ function SessionChat({
   const usageDependency = useMemo(() => {
     return messages
       .filter((m) => m.metadata?.usage)
-      .map((m) => `${m.id}-${m.metadata?.usage?.inputTokens}-${m.metadata?.usage?.outputTokens}`)
+      .map(
+        (m) =>
+          `${m.id}-${m.metadata?.usage?.inputTokens}-${m.metadata?.usage?.outputTokens}`,
+      )
       .join(",");
   }, [messages]);
 
@@ -175,8 +189,10 @@ function SessionChat({
 
       const modelDef = findSupportedChatModel(item.model);
       if (modelDef?.pricing) {
-        const inputCost = (input / 1_000_000) * modelDef.pricing.inputUsdPerMillionTokens;
-        const outputCost = (output / 1_000_000) * modelDef.pricing.outputUsdPerMillionTokens;
+        const inputCost =
+          (input / 1_000_000) * modelDef.pricing.inputUsdPerMillionTokens;
+        const outputCost =
+          (output / 1_000_000) * modelDef.pricing.outputUsdPerMillionTokens;
         totalCost += inputCost + outputCost;
       }
     }
@@ -212,7 +228,11 @@ function SessionChat({
         key.preventDefault();
         confirmToolCall(pending.toolCallId, true, true);
       }
-    } else if (key.name === "escape" && isTopLayer("base") && status === "streaming") {
+    } else if (
+      key.name === "escape" &&
+      isTopLayer("base") &&
+      status === "streaming"
+    ) {
       key.preventDefault();
       interrupt();
     }
@@ -232,7 +252,10 @@ function SessionChat({
     <SessionShell
       onSubmit={(text) => submit({ userText: text, mode, model })}
       loading={status === "submitted" || status === "streaming" || isCompacting}
-      interruptible={(status === "submitted" || status === "streaming") && !isCompacting}
+      isCompacting={isCompacting}
+      interruptible={
+        (status === "submitted" || status === "streaming") && !isCompacting
+      }
       inputDisabled={pendingConfirmations.length > 0 || isCompacting}
       compact={compact}
       tokenStats={tokenStats}

@@ -17,7 +17,9 @@ import { useToast } from "../providers/toast";
 const newSessionStateSchema = z.object({
   message: z.string(),
   mode: modeSchema,
-  model: z.string().refine((v) => !!findSupportedChatModel(v), "Unsupported model"),
+  model: z
+    .string()
+    .refine((v) => !!findSupportedChatModel(v), "Unsupported model"),
   reasoningEffort: z.enum(["none", "low", "medium", "high", "max"]).optional(),
 });
 

@@ -14,11 +14,13 @@ export const toolInputSchemas = {
   readFile: z.object({
     path: z.string().describe("Relative path to the file to read"),
     offset: z
-      .number()
+      .int()
+      .min(1)
       .optional()
       .describe("Starting line number (0-indexed) for paginated reading"),
     limit: z
-      .number()
+      .int()
+      .min(1)
       .optional()
       .describe("Maximum number of lines to return (default 200)"),
   }),
@@ -49,7 +51,9 @@ export const toolInputSchemas = {
       .enum(["content", "files", "count"])
       .optional()
       .default("content")
-      .describe("'content' shows matching lines, 'files' lists filenames, 'count' shows match counts"),
+      .describe(
+        "'content' shows matching lines, 'files' lists filenames, 'count' shows match counts",
+      ),
     maxResults: z
       .number()
       .optional()
@@ -62,9 +66,18 @@ export const toolInputSchemas = {
   }),
   editFile: z.object({
     path: z.string().describe("Relative path to edit"),
-    oldString: z.string().describe("Exact text to replace; must be unique unless replaceAll is true"),
+    oldString: z
+      .string()
+      .min(1)
+      .describe(
+        "Exact text to replace; must be unique unless replaceAll is true",
+      ),
     newString: z.string().describe("Replacement text"),
-    replaceAll: z.boolean().optional().default(false).describe("Replace all occurrences"),
+    replaceAll: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe("Replace all occurrences"),
   }),
   bash: z.object({
     command: z.string().describe("Shell command to run"),
@@ -72,16 +85,20 @@ export const toolInputSchemas = {
       .string()
       .optional()
       .describe("Short description of the command"),
-    timeout: z.number().optional().describe("Timeout in milliseconds"),
+    timeout: z.int().min(1).optional().describe("Timeout in milliseconds"),
     runInBackground: z
       .boolean()
       .optional()
       .default(false)
       .describe("Whether to run the command in the background"),
     port: z
-      .number()
+      .int()
+      .min(1)
+      .max(65535)
       .optional()
-      .describe("Optional port that this command binds to. If occupied, port check will free it or fail."),
+      .describe(
+        "Optional port that this command binds to. If occupied, port check will free it or fail.",
+      ),
   }),
   webSearch: z.object({
     query: z.string().describe("Search query to run on the web"),
@@ -89,7 +106,9 @@ export const toolInputSchemas = {
       .number()
       .optional()
       .default(5)
-      .describe("Maximum number of search results to return (default 5, max 20)"),
+      .describe(
+        "Maximum number of search results to return (default 5, max 20)",
+      ),
   }),
   todoWrite: z.object({
     items: z
@@ -122,11 +141,16 @@ export const toolInputSchemas = {
       .boolean()
       .optional()
       .default(false)
-      .describe("Whether the user can select multiple options (true means checkboxes, false means radio buttons)"),
+      .describe(
+        "Whether the user can select multiple options (true means checkboxes, false means radio buttons)",
+      ),
   }),
   gitStatus: z.object({}),
   gitDiff: z.object({
-    path: z.string().optional().describe("Optional relative path to restrict the diff to"),
+    path: z
+      .string()
+      .optional()
+      .describe("Optional relative path to restrict the diff to"),
   }),
   gitLog: z.object({
     limit: z
@@ -139,7 +163,8 @@ export const toolInputSchemas = {
 
 export const readOnlyToolContracts = {
   readFile: tool({
-    description: "Read a file from the current project directory. Supports optional line-based pagination via offset and limit.",
+    description:
+      "Read a file from the current project directory. Supports optional line-based pagination via offset and limit.",
     inputSchema: toolInputSchemas.readFile,
   }),
   listDirectory: tool({

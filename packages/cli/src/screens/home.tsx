@@ -10,7 +10,9 @@ export function Home() {
   const { mode, model, reasoningEffort } = usePromptConfig();
   const handleSubmit = useCallback(
     (text: string) => {
-      navigate("/sessions/new", { state: { message: text, mode, model, reasoningEffort } });
+      navigate("/sessions/new", {
+        state: { message: text, mode, model, reasoningEffort },
+      });
     },
     [navigate, mode, model, reasoningEffort],
   );

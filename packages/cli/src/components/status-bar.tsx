@@ -89,19 +89,25 @@ export function StatusBar({ tokenStats }: Props) {
         </>
       )}
 
-      {tokenStats && (tokenStats.inputTokens > 0 || tokenStats.outputTokens > 0) && (
-        <>
-          <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>
-            •
-          </text>
-          <text fg={colors.info}>
-            {tokenStats.totalCost > 0
-              ? `$${tokenStats.totalCost.toFixed(4)}`
-              : "Free"}{" "}
-            ({((tokenStats.inputTokens + tokenStats.outputTokens) / 1000).toFixed(1)}k tkn)
-          </text>
-        </>
-      )}
+      {tokenStats &&
+        (tokenStats.inputTokens > 0 || tokenStats.outputTokens > 0) && (
+          <>
+            <text attributes={TextAttributes.DIM} fg={colors.dimSeparator}>
+              •
+            </text>
+            <text fg={colors.info}>
+              {tokenStats.totalCost > 0
+                ? `$${tokenStats.totalCost.toFixed(4)}`
+                : "Free"}{" "}
+              (
+              {(
+                (tokenStats.inputTokens + tokenStats.outputTokens) /
+                1000
+              ).toFixed(1)}
+              k tkn)
+            </text>
+          </>
+        )}
 
       {contextRemainingElement}
     </box>

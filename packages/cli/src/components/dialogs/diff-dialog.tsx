@@ -1,18 +1,29 @@
-import { spawnSync } from "child_process";
+import { exec } from "child_process";
+import { useEffect, useState } from "react";
 import { useTheme } from "../../providers/theme";
 
 export function DiffDialogContent() {
   const { colors } = useTheme();
+  const [diff, setDiff] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  // Run git diff
-  const res = spawnSync("git", ["diff"], {
-    cwd: process.cwd(),
-    encoding: "utf-8",
-  });
+  useEffect(() => {
+    setLoading(true);
+    exec("git diff", { cwd: process.cwd() }, (error, stdout, stderr) => {
+      setDiff(stdout || stderr || "");
+      setLoading(false);
+    });
+  }, []);
 
-  const diff = res.stdout || res.stderr || "";
+  if (loading) {
+    return (
+      <box padding={1}>
+        <text fg="gray">Loading diff...</text>
+      </box>
+    );
+  }
 
-  if (!diff.trim()) {
+  if (!diff || !diff.trim()) {
     return (
       <box padding={1}>
         <text fg="gray">No changes found in the repository.</text>

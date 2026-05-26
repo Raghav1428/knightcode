@@ -6,48 +6,90 @@ import { spawnSync } from "child_process";
 import { apiClient } from "./api-client";
 import { killProcessOnPort, registerProcess } from "./background-tasks";
 
-const sessionOriginalContents = new Map<string, string | null>();
+const sessionOriginalContents = new Map<string, Map<string, string | null>>();
 
-async function recordOriginalContent(resolvedPath: string) {
-  if (sessionOriginalContents.has(resolvedPath)) {
+function isSafeRegex(pattern: string): boolean {
+  // Check for common catastrophic backtracking pattern signatures:
+  // Nested quantifiers like (a+)+, (a*)*, (a?)*, (.*)*, etc.
+  const nestedQuantifierRegex = /\([^)]*[*+?{][^)]*\)[*+?{]/;
+  if (nestedQuantifierRegex.test(pattern)) {
+    return false;
+  }
+  return true;
+}
+
+function escapeRegExp(string: string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function validateAndGetRegex(pattern: string, flags: string): RegExp {
+  if (!isSafeRegex(pattern)) {
+    return new RegExp(escapeRegExp(pattern), flags);
+  }
+  try {
+    return new RegExp(pattern, flags);
+  } catch {
+    return new RegExp(escapeRegExp(pattern), flags);
+  }
+}
+
+async function recordOriginalContent(sessionId: string, resolvedPath: string) {
+  if (!sessionOriginalContents.has(sessionId)) {
+    sessionOriginalContents.set(sessionId, new Map());
+  }
+  const sessionContents = sessionOriginalContents.get(sessionId)!;
+  if (sessionContents.has(resolvedPath)) {
     return;
   }
   if (existsSync(resolvedPath)) {
     try {
       const content = await readFile(resolvedPath, "utf-8");
-      sessionOriginalContents.set(resolvedPath, content);
+      sessionContents.set(resolvedPath, content);
     } catch {
       // ignore
     }
   } else {
-    sessionOriginalContents.set(resolvedPath, null);
+    sessionContents.set(resolvedPath, null);
   }
 }
 
-export async function undoSessionChanges(): Promise<{ revertedFiles: string[] }> {
+export async function undoSessionChanges(sessionId: string): Promise<{
+  revertedFiles: string[];
+  failedFiles: string[];
+}> {
   const revertedFiles: string[] = [];
+  const failedFiles: string[] = [];
   const cwd = resolveInsideCwd(".").resolved;
 
-  for (const [resolvedPath, originalContent] of sessionOriginalContents.entries()) {
+  const sessionContents = sessionOriginalContents.get(sessionId);
+  if (!sessionContents) {
+    return { revertedFiles, failedFiles };
+  }
+
+  for (const [resolvedPath, originalContent] of sessionContents.entries()) {
     try {
       const relPath = relative(cwd, resolvedPath);
       if (originalContent === null) {
         if (existsSync(resolvedPath)) {
           await unlink(resolvedPath);
-          revertedFiles.push(relPath);
         }
       } else {
         await mkdir(dirname(resolvedPath), { recursive: true });
         await writeFile(resolvedPath, originalContent, "utf-8");
-        revertedFiles.push(relPath);
       }
+      revertedFiles.push(relPath);
+      sessionContents.delete(resolvedPath);
     } catch {
-      // ignore
+      const relPath = relative(cwd, resolvedPath);
+      failedFiles.push(relPath);
     }
   }
 
-  sessionOriginalContents.clear();
-  return { revertedFiles };
+  if (sessionContents.size === 0) {
+    sessionOriginalContents.delete(sessionId);
+  }
+
+  return { revertedFiles, failedFiles };
 }
 
 const MAX_FILE_SIZE = 100_000;
@@ -78,10 +120,24 @@ export async function executeLocalTool(
   toolName: string,
   input: unknown,
   mode: ModeType,
+  sessionId?: string,
 ) {
+  const sId = sessionId ?? "default";
   if (
     mode === Mode.PLAN &&
-    !["readFile", "listDirectory", "glob", "grep", "webSearch", "webFetch", "todoWrite", "AskUserQuestion", "gitStatus", "gitDiff", "gitLog"].includes(toolName)
+    ![
+      "readFile",
+      "listDirectory",
+      "glob",
+      "grep",
+      "webSearch",
+      "webFetch",
+      "todoWrite",
+      "AskUserQuestion",
+      "gitStatus",
+      "gitDiff",
+      "gitLog",
+    ].includes(toolName)
   ) {
     throw new Error(`Tool ${toolName} is not available in PLAN mode`);
   }
@@ -92,10 +148,23 @@ export async function executeLocalTool(
       const { resolved } = resolveInsideCwd(path);
 
       const ext = path.split(".").pop()?.toLowerCase();
-      const imageExtensions = ["png", "jpg", "jpeg", "gif", "webp", "ico", "svg"];
+      const imageExtensions = [
+        "png",
+        "jpg",
+        "jpeg",
+        "gif",
+        "webp",
+        "ico",
+        "svg",
+      ];
       if (ext && imageExtensions.includes(ext)) {
         const buffer = await readFile(resolved);
-        const mimeType = ext === "svg" ? "image/svg+xml" : ext === "ico" ? "image/x-icon" : `image/${ext === "jpg" ? "jpeg" : ext}`;
+        const mimeType =
+          ext === "svg"
+            ? "image/svg+xml"
+            : ext === "ico"
+              ? "image/x-icon"
+              : `image/${ext === "jpg" ? "jpeg" : ext}`;
         return {
           content: buffer.toString("base64"),
           isImage: true,
@@ -188,12 +257,7 @@ export async function executeLocalTool(
       } = toolInputSchemas.grep.parse(input);
       const { cwd, resolved } = resolveInsideCwd(path);
 
-      let regex: RegExp;
-      try {
-        regex = new RegExp(pattern, caseInsensitive ? "i" : "");
-      } catch (err) {
-        throw new Error(`Invalid regex pattern: ${pattern}. ${(err as Error).message}`);
-      }
+      const regex = validateAndGetRegex(pattern, caseInsensitive ? "i" : "");
 
       // Check if resolved path is a directory or a file
       const stats = await stat(resolved);
@@ -249,7 +313,10 @@ export async function executeLocalTool(
             results.push({ file: relativePath });
           }
         } else if (outputMode === "count") {
-          const globalRegex = new RegExp(pattern, caseInsensitive ? "gi" : "g");
+          const globalRegex = validateAndGetRegex(
+            pattern,
+            caseInsensitive ? "gi" : "g",
+          );
           const matches = content.match(globalRegex);
           if (matches && matches.length > 0) {
             results.push({ file: relativePath, count: matches.length });
@@ -294,7 +361,9 @@ export async function executeLocalTool(
               }
             }
 
-            const sortedIncluded = Array.from(includedLines).sort((a, b) => a - b);
+            const sortedIncluded = Array.from(includedLines).sort(
+              (a, b) => a - b,
+            );
             for (const idx of sortedIncluded) {
               if (results.length >= limit) {
                 truncated = true;
@@ -321,7 +390,7 @@ export async function executeLocalTool(
     case "writeFile": {
       const { path, content } = toolInputSchemas.writeFile.parse(input);
       const { cwd, resolved } = resolveInsideCwd(path);
-      await recordOriginalContent(resolved);
+      await recordOriginalContent(sId, resolved);
       await mkdir(dirname(resolved), { recursive: true });
       await writeFile(resolved, content, "utf-8");
       return {
@@ -334,13 +403,15 @@ export async function executeLocalTool(
       const { path, oldString, newString, replaceAll } =
         toolInputSchemas.editFile.parse(input);
       const { cwd, resolved } = resolveInsideCwd(path);
-      await recordOriginalContent(resolved);
+      await recordOriginalContent(sId, resolved);
       const content = await readFile(resolved, "utf-8");
       const occurrences = content.split(oldString).length - 1;
 
       if (occurrences === 0) throw new Error("oldString not found in file");
       if (occurrences > 1 && !replaceAll)
-        throw new Error(`oldString is ambiguous; found ${occurrences} matches. Use replaceAll: true to replace all.`);
+        throw new Error(
+          `oldString is ambiguous; found ${occurrences} matches. Use replaceAll: true to replace all.`,
+        );
 
       const updated = replaceAll
         ? content.replaceAll(oldString, newString)
@@ -354,8 +425,12 @@ export async function executeLocalTool(
       };
     }
     case "bash": {
-      const { command, timeout = DEFAULT_TIMEOUT, runInBackground = false, port } =
-        toolInputSchemas.bash.parse(input);
+      const {
+        command,
+        timeout = DEFAULT_TIMEOUT,
+        runInBackground = false,
+        port,
+      } = toolInputSchemas.bash.parse(input);
 
       if (runInBackground) {
         if (port !== undefined) {
@@ -433,7 +508,8 @@ export async function executeLocalTool(
       const { path: diffPath } = toolInputSchemas.gitDiff.parse(input);
       const args = ["diff"];
       if (diffPath) {
-        args.push(diffPath);
+        const { cwd, resolved } = resolveInsideCwd(diffPath);
+        args.push("--", relative(cwd, resolved));
       }
       const res = spawnSync("git", args, {
         cwd: resolveInsideCwd(".").resolved,
@@ -460,7 +536,9 @@ export async function executeLocalTool(
   }
 }
 
-export function getSessionModifiedFiles(): string[] {
+export function getSessionModifiedFiles(sessionId: string): string[] {
   const cwd = resolveInsideCwd(".").resolved;
-  return Array.from(sessionOriginalContents.keys()).map((p) => relative(cwd, p));
+  const sessionContents = sessionOriginalContents.get(sessionId);
+  if (!sessionContents) return [];
+  return Array.from(sessionContents.keys()).map((p) => relative(cwd, p));
 }

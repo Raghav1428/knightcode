@@ -289,7 +289,11 @@ function FileMentionMenu({
   }
 
   return (
-    <scrollbox ref={scrollRef} height={visibleHeight} backgroundColor={colors.surface}>
+    <scrollbox
+      ref={scrollRef}
+      height={visibleHeight}
+      backgroundColor={colors.surface}
+    >
       {candidates.map((candidate, index) => {
         const isSelected = index === selectedIndex;
 
@@ -325,6 +329,7 @@ function FileMentionMenu({
 type Props = {
   onSubmit: (text: string) => void;
   disabled?: boolean;
+  isCompacting?: boolean;
   compact?: () => void;
   tokenStats?: {
     inputTokens: number;
@@ -341,7 +346,13 @@ export const TEXTAREA_KEY_BINDINGS: KeyBinding[] = [
   { name: "enter", shift: true, action: "newline" },
 ];
 
-export function InputBar({ onSubmit, disabled = false, compact, tokenStats }: Props) {
+export function InputBar({
+  onSubmit,
+  disabled = false,
+  isCompacting = false,
+  compact,
+  tokenStats,
+}: Props) {
   const {
     mode,
     toggleMode,
@@ -713,9 +724,11 @@ export function InputBar({ onSubmit, disabled = false, compact, tokenStats }: Pr
             keyBindings={TEXTAREA_KEY_BINDINGS}
             onContentChange={handleTextareaContentChange}
             placeholder={
-              disabled
-                ? "Awaiting confirmation (y/n/a)..."
-                : `Ask anything... "Fix a bug in the database"`
+              isCompacting
+                ? "Compacting context... please wait"
+                : disabled
+                  ? "Awaiting confirmation (y/n/a)..."
+                  : `Ask anything... "Fix a bug in the database"`
             }
           />
           <StatusBar tokenStats={tokenStats} />

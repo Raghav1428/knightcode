@@ -6,6 +6,8 @@ type Props = {
   credits: number;
   originalMessageCount: number;
   summary: string;
+  summaryCount?: number;
+  preservedCount?: number;
 };
 
 export function CompactionMessage({
@@ -13,6 +15,8 @@ export function CompactionMessage({
   credits,
   originalMessageCount,
   summary,
+  summaryCount = 1,
+  preservedCount = 4,
 }: Props) {
   const { colors } = useTheme();
 
@@ -46,7 +50,8 @@ export function CompactionMessage({
           </text>
           <text fg={colors.dimSeparator}>➔</text>
           <text fg="white" attributes={TextAttributes.BOLD}>
-            5 messages (1 summary + 4 preserved)
+            {summaryCount + preservedCount} messages ({summaryCount} summary +{" "}
+            {preservedCount} preserved)
           </text>
         </box>
 
@@ -59,7 +64,11 @@ export function CompactionMessage({
           width="100%"
           gap={0}
         >
-          <text fg={colors.dimSeparator} attributes={TextAttributes.BOLD} marginBottom={1}>
+          <text
+            fg={colors.dimSeparator}
+            attributes={TextAttributes.BOLD}
+            marginBottom={1}
+          >
             ENGINEERING SUMMARY:
           </text>
           {summary.split("\n").map((line, index) => {

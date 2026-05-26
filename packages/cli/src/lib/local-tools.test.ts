@@ -1,14 +1,23 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { executeLocalTool, undoSessionChanges } from "./local-tools";
 import { Mode } from "@knightcode/shared";
-import { writeFile, unlink, mkdir } from "fs/promises";
-import { join } from "path";
+import { writeFile, unlink, mkdir, mkdtemp, rm } from "fs/promises";
+import { join, relative } from "path";
 
 describe("local-tools tool functioning", () => {
-  const testFile = "temp_test_file.txt";
+  let tempDir: string;
+  let testFile: string;
+  let pngFile: string;
+  let testRevertFile: string;
 
   beforeAll(async () => {
-    // Ensure we create a test file in CWD
+    // Create a unique temp directory inside process.cwd() so it passes CWD resolution checks
+    tempDir = await mkdtemp(join(process.cwd(), "temp_test_"));
+    testFile = join(tempDir, "temp_test_file.txt");
+    pngFile = join(tempDir, "temp_test_image.png");
+    testRevertFile = join(tempDir, "temp_revert_file.txt");
+
+    // Ensure we create a test file in the temp directory
     await writeFile(
       testFile,
       "hello world\nthis is a line\nhello world\nline 4\nhello world",
@@ -18,7 +27,7 @@ describe("local-tools tool functioning", () => {
 
   afterAll(async () => {
     try {
-      await unlink(testFile);
+      await rm(tempDir, { recursive: true, force: true });
     } catch {}
   });
 
@@ -36,6 +45,7 @@ describe("local-tools tool functioning", () => {
         replaceAll: false,
       },
       Mode.BUILD,
+      "test-session",
     )) as any;
 
     expect(res.success).toBe(true);
@@ -58,6 +68,7 @@ describe("local-tools tool functioning", () => {
           replaceAll: false,
         },
         Mode.BUILD,
+        "test-session",
       ),
     ).rejects.toThrow(/ambiguous/);
   });
@@ -74,6 +85,7 @@ describe("local-tools tool functioning", () => {
         replaceAll: true,
       },
       Mode.BUILD,
+      "test-session",
     )) as any;
 
     expect(res.success).toBe(true);
@@ -96,6 +108,7 @@ describe("local-tools tool functioning", () => {
         outputMode: "content",
       },
       Mode.BUILD,
+      "test-session",
     )) as any;
 
     expect(resContent.results).toBeDefined();
@@ -110,11 +123,14 @@ describe("local-tools tool functioning", () => {
         outputMode: "files",
       },
       Mode.BUILD,
+      "test-session",
     )) as any;
 
     expect(resFiles.results).toBeDefined();
     expect(resFiles.results.length).toBe(1);
-    expect(resFiles.results[0].file).toContain(testFile);
+    expect(resFiles.results[0].file).toContain(
+      relative(process.cwd(), testFile),
+    );
 
     // outputMode count
     const resCount = (await executeLocalTool(
@@ -125,6 +141,7 @@ describe("local-tools tool functioning", () => {
         outputMode: "count",
       },
       Mode.BUILD,
+      "test-session",
     )) as any;
 
     expect(resCount.results).toBeDefined();
@@ -143,6 +160,7 @@ describe("local-tools tool functioning", () => {
         limit: 3,
       },
       Mode.BUILD,
+      "test-session",
     )) as any;
 
     expect(res.content).toBe("line2\nline3\nline4");
@@ -153,7 +171,6 @@ describe("local-tools tool functioning", () => {
   });
 
   test("readFile supports image files by encoding to base64", async () => {
-    const pngFile = "temp_test_image.png";
     const data = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]); // png magic bytes
     await writeFile(pngFile, data);
 
@@ -164,6 +181,7 @@ describe("local-tools tool functioning", () => {
           path: pngFile,
         },
         Mode.BUILD,
+        "test-session",
       )) as any;
 
       expect(res.isImage).toBe(true);
@@ -178,7 +196,6 @@ describe("local-tools tool functioning", () => {
   });
 
   test("undoSessionChanges reverts file changes successfully", async () => {
-    const testRevertFile = "temp_revert_file.txt";
     await writeFile(testRevertFile, "initial content", "utf-8");
 
     try {
@@ -192,6 +209,7 @@ describe("local-tools tool functioning", () => {
           replaceAll: false,
         },
         Mode.BUILD,
+        "test-session",
       );
 
       // Verify it was modified
@@ -199,8 +217,10 @@ describe("local-tools tool functioning", () => {
       expect(current).toBe("modified content");
 
       // Undo changes
-      const undoRes = await undoSessionChanges();
-      expect(undoRes.revertedFiles).toContain(testRevertFile);
+      const undoRes = await undoSessionChanges("test-session");
+      expect(undoRes.revertedFiles).toContain(
+        relative(process.cwd(), testRevertFile),
+      );
 
       // Verify it was reverted to initial content
       const reverted = await Bun.file(testRevertFile).text();
@@ -215,13 +235,28 @@ describe("local-tools tool functioning", () => {
   test("gitStatus, gitDiff, and gitLog execute without throwing", async () => {
     // These might return exitCode non-zero or error if git is not initialized in CWD,
     // but the execution of the tool itself should not crash.
-    const resStatus = (await executeLocalTool("gitStatus", {}, Mode.BUILD)) as any;
+    const resStatus = (await executeLocalTool(
+      "gitStatus",
+      {},
+      Mode.BUILD,
+      "test-session",
+    )) as any;
     expect(resStatus.exitCode).toBeDefined();
 
-    const resDiff = (await executeLocalTool("gitDiff", {}, Mode.BUILD)) as any;
+    const resDiff = (await executeLocalTool(
+      "gitDiff",
+      {},
+      Mode.BUILD,
+      "test-session",
+    )) as any;
     expect(resDiff.exitCode).toBeDefined();
 
-    const resLog = (await executeLocalTool("gitLog", { limit: 5 }, Mode.BUILD)) as any;
+    const resLog = (await executeLocalTool(
+      "gitLog",
+      { limit: 5 },
+      Mode.BUILD,
+      "test-session",
+    )) as any;
     expect(resLog.exitCode).toBeDefined();
   });
 
@@ -233,6 +268,7 @@ describe("local-tools tool functioning", () => {
         runInBackground: true,
       },
       Mode.BUILD,
+      "test-session",
     )) as any;
 
     expect(res.success).toBe(true);

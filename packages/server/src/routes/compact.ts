@@ -1,9 +1,6 @@
 import { zValidator } from "@hono/zod-validator";
 import { db } from "@knightcode/database/client";
-import {
-  getToolContracts,
-  modeSchema,
-} from "@knightcode/shared";
+import { getToolContracts, modeSchema } from "@knightcode/shared";
 import { isSupportedChatModel, resolveChatModel } from "../lib/models";
 import { convertToModelMessages, generateText } from "ai";
 import { Hono } from "hono";
@@ -45,7 +42,10 @@ function estimateTokensForMessages(messages: any[]): number {
           tokens += estimateTokensForText(part.text);
         } else if (part.type === "reasoning" && typeof part.text === "string") {
           tokens += estimateTokensForText(part.text);
-        } else if (part.type === "dynamic-tool" || part.type.startsWith("tool-")) {
+        } else if (
+          part.type === "dynamic-tool" ||
+          part.type.startsWith("tool-")
+        ) {
           if (part.input) {
             tokens += estimateTokensForText(JSON.stringify(part.input));
           }
@@ -133,7 +133,8 @@ Produce only this summary. Be extremely precise, technical, and complete. Do not
       ...modelMessages,
       {
         role: "user",
-        content: "Generate the engineering state summary of the conversation so far. Format it exactly as instructed.",
+        content:
+          "Generate the engineering state summary of the conversation so far. Format it exactly as instructed.",
       },
     ];
 
@@ -161,27 +162,37 @@ Produce only this summary. Be extremely precise, technical, and complete. Do not
 
       const summaryMessage = {
         id: compactionId,
-        role: "user" as const,
+        role: "assistant" as const,
         parts: [{ type: "text" as const, text: compResult.text }],
         metadata: {
           isCompaction: true,
           model: resolvedModel.modelId,
           credits: billableUsage.credits,
           originalMessageCount: messages.length,
+          summaryCount: 1,
+          preservedCount: preserved.length,
         },
       };
 
       const compactedMessages = [summaryMessage, ...preserved];
 
       // Calculate estimated new context size
-      const estimatedTokens = 1500 + estimateTokensForMessages(compactedMessages);
+      const estimatedTokens =
+        1500 + estimateTokensForMessages(compactedMessages);
 
       // Find the last assistant message in compactedMessages to update its token count metadata.
       // This will automatically refresh the TUI status bar.
-      const lastAssistantMessage = [...compactedMessages].reverse().find(
-        (m) => m.role === "assistant",
-      );
+      const lastAssistantMessage = [...compactedMessages]
+        .reverse()
+        .find((m) => m.role === "assistant");
       if (lastAssistantMessage) {
+        // Zero out metadata.usage on all other messages in compactedMessages to avoid double counting
+        for (const msg of compactedMessages) {
+          if (msg !== lastAssistantMessage && msg.metadata) {
+            delete msg.metadata.usage;
+          }
+        }
+
         if (!lastAssistantMessage.metadata) {
           lastAssistantMessage.metadata = {};
         }
