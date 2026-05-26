@@ -148,14 +148,13 @@ function branchExists(repoRoot: string, branchName: string): boolean {
 }
 
 function linkNodeModules(repoRoot: string, worktreePath: string) {
-  const source = join(repoRoot, "node_modules");
   const target = join(worktreePath, "node_modules");
-  if (!existsSync(source) || existsSync(target)) return;
+  if (existsSync(target)) return;
 
   try {
-    symlinkSync(source, target, "junction");
+    mkdirSync(target, { recursive: true });
   } catch {
-    // Dependency linking is an optimization; isolation still works without it.
+    // isolated creation fails or is skipped if already exists
   }
 }
 

@@ -189,12 +189,16 @@ const app = new Hono<AuthenticatedEnv>().post(
 
         if (hasPendingToolCalls(event.responseMessage)) return;
 
-        await db.session.update({
+        const updated = await db.session.update({
           where: { id, userId },
           data: {
             messages: event.messages as unknown as Prisma.InputJsonValue,
           },
         });
+
+        if (!updated) {
+          throw new Error("Failed to update session messages in database");
+        }
 
         if (!completedUsage) return;
 

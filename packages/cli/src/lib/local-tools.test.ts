@@ -298,6 +298,115 @@ describe("local-tools tool functioning", () => {
       process.kill(res.pid, "SIGKILL");
     } catch {}
   });
+
+  test("resolveInsideRoot prevents symlink directory escapes", async () => {
+    const outsideTarget = join(tmpdir(), "outside_temp.txt");
+    await writeFile(outsideTarget, "secret content", "utf-8");
+    const linkPath = join(tempDir, "evil_link.txt");
+    try {
+      const fs = require("fs");
+      fs.symlinkSync(outsideTarget, linkPath);
+    } catch {
+      return;
+    }
+
+    try {
+      await expect(
+        executeLocalTool(
+          "readFile",
+          { path: relative(process.cwd(), linkPath) },
+          Mode.BUILD,
+          "test-session",
+        )
+      ).rejects.toThrow();
+
+      await expect(
+        executeLocalTool(
+          "writeFile",
+          { path: relative(process.cwd(), linkPath), content: "evil rewrite" },
+          Mode.BUILD,
+          "test-session",
+        )
+      ).rejects.toThrow();
+    } finally {
+      try {
+        await unlink(linkPath);
+      } catch {}
+      try {
+        await unlink(outsideTarget);
+      } catch {}
+    }
+  });
+
+  test("readFile line streaming and size truncation", async () => {
+    const largeFilePath = join(tempDir, "large_file.txt");
+    const lineCount = 300;
+    const contentLines = Array.from({ length: lineCount }, (_, i) => `Line ${i + 1}`);
+    await writeFile(largeFilePath, contentLines.join("\n"), "utf-8");
+
+    const resPage = (await executeLocalTool(
+      "readFile",
+      { path: relative(process.cwd(), largeFilePath), offset: 5, limit: 10 },
+      Mode.BUILD,
+      "test-session",
+    )) as any;
+
+    expect(resPage.linesReturned).toBe(10);
+    expect(resPage.totalLines).toBe(lineCount);
+    expect(resPage.content).toBe(contentLines.slice(5, 15).join("\n"));
+    expect(resPage.truncated).toBe(true);
+
+    const hugeFilePath = join(tempDir, "huge_file.txt");
+    const hugeLine = "a".repeat(1000) + "\n";
+    const hugeContent = hugeLine.repeat(110);
+    await writeFile(hugeFilePath, hugeContent, "utf-8");
+
+    const resHuge = (await executeLocalTool(
+      "readFile",
+      { path: relative(process.cwd(), hugeFilePath) },
+      Mode.BUILD,
+      "test-session",
+    )) as any;
+
+    expect(resHuge.truncated).toBe(true);
+    expect(resHuge.content.length).toBe(100000);
+    expect(resHuge.totalLength).toBe(hugeContent.length);
+
+    await unlink(largeFilePath);
+    await unlink(hugeFilePath);
+  });
+
+  test("hidden/secret files (.git, .env) are blocked and filtered from listings", async () => {
+    const envPath = join(tempDir, ".env");
+    await writeFile(envPath, "SECRET=123", "utf-8");
+
+    const relativeEnv = relative(process.cwd(), envPath);
+    await expect(
+      executeLocalTool("readFile", { path: relativeEnv }, Mode.BUILD, "test-session")
+    ).rejects.toThrow();
+
+    const resList = (await executeLocalTool(
+      "listDirectory",
+      { path: relative(process.cwd(), tempDir) },
+      Mode.BUILD,
+      "test-session",
+    )) as any;
+
+    const envEntry = resList.entries.find((e: any) => e.name === ".env");
+    expect(envEntry).toBeUndefined();
+
+    const resGlob = (await executeLocalTool(
+      "glob",
+      { path: relative(process.cwd(), tempDir), pattern: "**/*" },
+      Mode.BUILD,
+      "test-session",
+    )) as any;
+
+    const hasEnv = resGlob.files.some((f: string) => f.includes(".env"));
+    expect(hasEnv).toBe(false);
+
+    await unlink(envPath);
+  });
 });
 
 describe("local-tools worktree isolation", () => {

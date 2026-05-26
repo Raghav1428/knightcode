@@ -65,7 +65,28 @@ export function isCommandAllowed(command: string): boolean {
   const normalised = command.trim();
   return permissions.allowedCommands.some((allowed) => {
     const pattern = allowed.trim();
-    return normalised === pattern || normalised.startsWith(`${pattern} `);
+    if (normalised === pattern) {
+      return true;
+    }
+    if (normalised.startsWith(`${pattern} `)) {
+      const remainder = normalised.slice(pattern.length + 1).trim();
+      if (!remainder) {
+        return true;
+      }
+      const nextChar = remainder[0];
+      const nextTwo = remainder.slice(0, 2);
+      if (
+        nextTwo === "&&" ||
+        nextTwo === "||" ||
+        nextChar === "|" ||
+        nextChar === ";" ||
+        nextChar === "&"
+      ) {
+        return false;
+      }
+      return true;
+    }
+    return false;
   });
 }
 

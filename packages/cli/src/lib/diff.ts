@@ -15,6 +15,20 @@ export function computeLineDiff(oldStr: string, newStr: string): DiffLine[] {
   const oldLines = splitLines(oldStr);
   const newLines = splitLines(newStr);
 
+  const maxCells = 200_000;
+  if ((oldLines.length + 1) * (newLines.length + 1) > maxCells) {
+    return [
+      {
+        type: "deleted",
+        content: `[Diff too large: ${oldLines.length} old lines]`,
+      },
+      {
+        type: "added",
+        content: `[Diff too large: ${newLines.length} new lines]`,
+      },
+    ];
+  }
+
   const dp: number[][] = Array(oldLines.length + 1)
     .fill(null)
     .map(() => Array(newLines.length + 1).fill(0));

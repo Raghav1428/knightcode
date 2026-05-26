@@ -126,9 +126,11 @@ export const toolInputSchemas = {
       .describe("List of progress items to display"),
   }),
   webFetch: z.object({
-    url: z.string().url().describe("URL to fetch and convert to text"),
+    url: z.url().describe("URL to fetch and convert to text"),
     maxLength: z
-      .number()
+      .int()
+      .min(1)
+      .max(200_000)
       .optional()
       .default(20000)
       .describe("Maximum character length of returned text (default 20000)"),

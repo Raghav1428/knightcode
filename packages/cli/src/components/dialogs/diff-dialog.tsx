@@ -20,10 +20,23 @@ export function DiffDialogContent({ sessionId }: Props) {
     setLoading(true);
     const root = getExecutionRoot(sessionId).root;
     setRootLabel(formatRootForDisplay(root));
-    exec("git diff", { cwd: root }, (error, stdout, stderr) => {
-      setDiff(stdout || stderr || "");
-      setLoading(false);
-    });
+    const MAX_DIFF_BUFFER = 512 * 1024; // 512KB
+    exec(
+      "git diff --no-color",
+      { cwd: root, maxBuffer: MAX_DIFF_BUFFER },
+      (error, stdout, stderr) => {
+        const output = stdout || stderr || "";
+        const truncated =
+          error instanceof Error &&
+          /maxBuffer|ERR_CHILD_PROCESS_STDIO_MAXBUFFER/i.test(error.message);
+        setDiff(
+          truncated
+            ? `${output}\n\n[Diff truncated at ${MAX_DIFF_BUFFER} bytes]`
+            : output,
+        );
+        setLoading(false);
+      },
+    );
   }, [sessionId]);
 
   if (loading) {

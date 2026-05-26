@@ -95,6 +95,21 @@ const app = new Hono<AuthenticatedEnv>().post(
     const toSummarize = validatedMessages.slice(0, -4);
     const preserved = validatedMessages.slice(-4);
 
+    const lastSummarizedMessage = toSummarize[toSummarize.length - 1];
+    const lastMessageId = lastSummarizedMessage?.id || "initial";
+    const compactionId = `compaction-${lastMessageId}`;
+
+    const dbMessages = (session.messages as any[]) || [];
+    const alreadyCompacted = dbMessages.some((m) => m && m.id === compactionId);
+    if (alreadyCompacted) {
+      const estimatedTokens = 1500 + estimateTokensForMessages(dbMessages);
+      return c.json({
+        compactedMessages: dbMessages,
+        credits: 0,
+        estimatedTokens,
+      });
+    }
+
     const modelMessages = await convertToModelMessages(toSummarize, {
       tools: tools as any,
     });
@@ -159,13 +174,6 @@ Produce only this summary. Be extremely precise, technical, and complete. Do not
         usage,
       });
 
-      const compactionId = `compaction-${Date.now()}`;
-      await ingestAiUsage({
-        externalCustomerId: userId,
-        eventId: `compaction:${id}:${compactionId}`,
-        credits: billableUsage.credits,
-      });
-
       const summaryMessage = {
         id: compactionId,
         role: "assistant" as const,
@@ -215,12 +223,25 @@ Produce only this summary. Be extremely precise, technical, and complete. Do not
         };
       }
 
-      await db.session.update({
+      const updated = await db.session.update({
         where: { id, userId },
         data: {
           messages: compactedMessages as any,
         },
       });
+      if (!updated) {
+        throw new Error("Failed to update session messages in database");
+      }
+
+      try {
+        await ingestAiUsage({
+          externalCustomerId: userId,
+          eventId: `compaction:${id}:${compactionId}`,
+          credits: billableUsage.credits,
+        });
+      } catch (ingestErr) {
+        console.error("Failed to ingest Polar AI usage for compaction:", ingestErr);
+      }
 
       return c.json({
         compactedMessages,

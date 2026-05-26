@@ -1,7 +1,8 @@
 import { Mode, toolInputSchemas, type ModeType } from "@knightcode/shared";
-import { existsSync } from "fs";
-import { mkdir, readFile, readdir, stat, writeFile, unlink } from "fs/promises";
+import fs, { existsSync, lstatSync, realpathSync } from "fs";
+import { mkdir, readFile, readdir, stat, writeFile, unlink, open } from "fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "path";
+import readline from "readline";
 import { spawnSync } from "child_process";
 import safeRegex from "safe-regex";
 import { apiClient } from "./api-client";
@@ -94,12 +95,68 @@ const MAX_MATCHES = 200;
 const MAX_OUTPUT = 50_000;
 const DEFAULT_TIMEOUT = 120_000;
 
-function resolveInsideRoot(root: string, path: string) {
+function resolveInsideRoot(root: string, path: string, isWrite = false) {
   const resolved = resolve(root, path);
-  const rel = relative(root, resolved);
 
+  let realRoot: string;
+  try {
+    realRoot = realpathSync(root);
+  } catch {
+    realRoot = resolve(root);
+  }
+
+  let realResolved = resolved;
+  try {
+    realResolved = realpathSync(resolved);
+  } catch {
+    let parent = dirname(resolved);
+    while (parent && parent !== resolved) {
+      try {
+        const realParent = realpathSync(parent);
+        realResolved = join(realParent, relative(parent, resolved));
+        break;
+      } catch {
+        const nextParent = dirname(parent);
+        if (nextParent === parent) {
+          realResolved = resolved;
+          break;
+        }
+        parent = nextParent;
+      }
+    }
+    if (!realResolved) {
+      realResolved = resolved;
+    }
+  }
+
+  const rel = relative(realRoot, realResolved);
   if (rel.startsWith("..") || isAbsolute(rel)) {
     throw new Error("Path is outside the project directory");
+  }
+
+  if (isWrite) {
+    let current = resolved;
+    while (current && current.length >= root.length && current !== dirname(current)) {
+      try {
+        if (existsSync(current)) {
+          const stats = lstatSync(current);
+          if (stats.isSymbolicLink()) {
+            const linkTarget = realpathSync(current);
+            const linkRel = relative(realRoot, linkTarget);
+            if (linkRel.startsWith("..") || isAbsolute(linkRel)) {
+              throw new Error("Parent symlink points outside the project directory");
+            }
+          }
+        }
+      } catch (err: any) {
+        if (err.message?.includes("outside the project directory")) {
+          throw err;
+        }
+      }
+      const parent = dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
   }
 
   return { cwd: root, resolved };
@@ -116,6 +173,15 @@ function assertSafeProjectFile(resolved: string, cwd: string, action: string) {
 
   if (fileName === ".env" || fileName.startsWith(".env.")) {
     throw new Error(`Refusing to ${action} environment/secret files`);
+  }
+}
+
+function isSafeProjectFile(resolved: string, cwd: string): boolean {
+  try {
+    assertSafeProjectFile(resolved, cwd, "read");
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -175,6 +241,9 @@ export async function executeLocalTool(
       const { cwd, resolved } = resolveInsideRoot(executionRoot, path);
       assertSafeProjectFile(resolved, cwd, "read");
 
+      const stats = await stat(resolved);
+      const fileSize = stats.size;
+
       const ext = path.split(".").pop()?.toLowerCase();
       const imageExtensions = [
         "png",
@@ -186,7 +255,15 @@ export async function executeLocalTool(
         "svg",
       ];
       if (ext && imageExtensions.includes(ext)) {
-        const buffer = await readFile(resolved);
+        const bytesToRead = Math.min(fileSize, MAX_FILE_SIZE);
+        const buffer = Buffer.alloc(bytesToRead);
+        const fileHandle = await open(resolved, "r");
+        try {
+          await fileHandle.read(buffer, 0, bytesToRead, 0);
+        } finally {
+          await fileHandle.close();
+        }
+
         const mimeType =
           ext === "svg"
             ? "image/svg+xml"
@@ -197,44 +274,72 @@ export async function executeLocalTool(
           content: buffer.toString("base64"),
           isImage: true,
           mimeType,
-          totalLength: buffer.length,
+          totalLength: fileSize,
+          truncated: fileSize > MAX_FILE_SIZE,
         };
       }
 
-      const raw = await readFile(resolved, "utf-8");
-
-      // Paginated line-based reading
+      // Paginated line-based reading using readline stream to avoid buffering files
       if (offset !== undefined || limit !== undefined) {
-        const lines = raw.split("\n");
         const start = offset ?? 0;
         const count = limit ?? 200;
-        const sliced = lines.slice(start, start + count);
+        const lines: string[] = [];
+        let lineCount = 0;
+
+        const fileStream = fs.createReadStream(resolved, { encoding: "utf-8" });
+        const rl = readline.createInterface({
+          input: fileStream,
+          crlfDelay: Infinity,
+        });
+
+        for await (const line of rl) {
+          if (lineCount >= start && lineCount < start + count) {
+            lines.push(line);
+          }
+          lineCount++;
+        }
+
         return {
-          content: sliced.join("\n"),
-          totalLines: lines.length,
+          content: lines.join("\n"),
+          totalLines: lineCount,
           offset: start,
-          linesReturned: sliced.length,
-          truncated: start + count < lines.length,
+          linesReturned: lines.length,
+          truncated: start + count < lineCount,
         };
       }
 
-      return raw.length > MAX_FILE_SIZE
-        ? {
-            content: raw.slice(0, MAX_FILE_SIZE),
-            truncated: true,
-            totalLength: raw.length,
-          }
-        : { content: raw };
+      if (fileSize > MAX_FILE_SIZE) {
+        const bytesToRead = Math.min(fileSize, MAX_FILE_SIZE * 2);
+        const buffer = Buffer.alloc(bytesToRead);
+        const fileHandle = await open(resolved, "r");
+        try {
+          await fileHandle.read(buffer, 0, bytesToRead, 0);
+        } finally {
+          await fileHandle.close();
+        }
+        const text = buffer.toString("utf-8");
+        return {
+          content: text.slice(0, MAX_FILE_SIZE),
+          truncated: true,
+          totalLength: fileSize,
+        };
+      } else {
+        const raw = await readFile(resolved, "utf-8");
+        return { content: raw };
+      }
     }
     case "listDirectory": {
       const { path } = toolInputSchemas.listDirectory.parse(input);
       const { cwd, resolved } = resolveInsideRoot(executionRoot, path);
+      assertSafeProjectFile(resolved, cwd, "read");
       const entries = await readdir(resolved);
       const results: { name: string; type: "file" | "directory" }[] = [];
 
       for (const entry of entries) {
+        const entryResolved = join(resolved, entry);
+        if (!isSafeProjectFile(entryResolved, cwd)) continue;
         if (entry.startsWith(".") || entry === "node_modules") continue;
-        const info = await stat(join(resolved, entry));
+        const info = await stat(entryResolved);
         results.push({
           name: entry,
           type: info.isDirectory() ? "directory" : "file",
@@ -253,6 +358,7 @@ export async function executeLocalTool(
     case "glob": {
       const { pattern, path } = toolInputSchemas.glob.parse(input);
       const { cwd, resolved } = resolveInsideRoot(executionRoot, path);
+      assertSafeProjectFile(resolved, cwd, "read");
       const glob = new Bun.Glob(pattern);
       const files: string[] = [];
       let truncated = false;
@@ -262,12 +368,14 @@ export async function executeLocalTool(
         dot: false,
         onlyFiles: true,
       })) {
+        const fileResolved = resolve(resolved, match);
+        if (!isSafeProjectFile(fileResolved, cwd)) continue;
         if (match.includes("node_modules")) continue;
         if (files.length >= MAX_RESULTS) {
           truncated = true;
           break;
         }
-        files.push(relative(cwd, resolve(resolved, match)));
+        files.push(relative(cwd, fileResolved));
       }
 
       files.sort();
@@ -284,6 +392,7 @@ export async function executeLocalTool(
         maxResults = 200,
       } = toolInputSchemas.grep.parse(input);
       const { cwd, resolved } = resolveInsideRoot(executionRoot, path);
+      assertSafeProjectFile(resolved, cwd, "read");
 
       const regex = validateAndGetRegex(pattern, caseInsensitive ? "i" : "");
 
@@ -300,12 +409,14 @@ export async function executeLocalTool(
           dot: false,
           onlyFiles: true,
         })) {
+          const fileResolved = resolve(resolved, match);
+          if (!isSafeProjectFile(fileResolved, cwd)) continue;
           const isIgnored =
             match.includes("node_modules") ||
             match.includes(".git") ||
             match.includes(".knightcode");
           if (isIgnored) continue;
-          filesToSearch.push(resolve(resolved, match));
+          filesToSearch.push(fileResolved);
         }
       } else {
         filesToSearch.push(resolved);
@@ -417,7 +528,7 @@ export async function executeLocalTool(
     }
     case "writeFile": {
       const { path, content } = toolInputSchemas.writeFile.parse(input);
-      const { cwd, resolved } = resolveInsideRoot(executionRoot, path);
+      const { cwd, resolved } = resolveInsideRoot(executionRoot, path, true);
       assertSafeProjectFile(resolved, cwd, "modify");
       await recordOriginalContent(sId, resolved);
       await mkdir(dirname(resolved), { recursive: true });
@@ -431,7 +542,7 @@ export async function executeLocalTool(
     case "editFile": {
       const { path, oldString, newString, replaceAll } =
         toolInputSchemas.editFile.parse(input);
-      const { cwd, resolved } = resolveInsideRoot(executionRoot, path);
+      const { cwd, resolved } = resolveInsideRoot(executionRoot, path, true);
       assertSafeProjectFile(resolved, cwd, "modify");
       await recordOriginalContent(sId, resolved);
       const content = await readFile(resolved, "utf-8");

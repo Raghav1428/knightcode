@@ -18,6 +18,8 @@ const fetchSchema = z.object({
   maxLength: z.number().int().min(1).max(200_000).optional().default(20_000),
 });
 
+class SafeTargetError extends Error {}
+
 function isPrivateIp(ip: string): boolean {
   const normalized = ip.toLowerCase();
   if (net.isIPv4(normalized)) {
@@ -39,7 +41,7 @@ function isPrivateIp(ip: string): boolean {
       normalized === "::" ||
       normalized.startsWith("fc") ||
       normalized.startsWith("fd") ||
-      normalized.startsWith("fe80:")
+      /^fe[89ab][0-9a-f]:/.test(normalized)
     );
   }
 
@@ -53,11 +55,11 @@ function isPrivateIp(ip: string): boolean {
 async function assertSafeTarget(rawUrl: string) {
   const u = new URL(rawUrl);
   if (!["http:", "https:"].includes(u.protocol)) {
-    throw new Error("Only http/https URLs are allowed");
+    throw new SafeTargetError("Only http/https URLs are allowed");
   }
   const records = await dns.lookup(u.hostname, { all: true });
   if (records.some((r) => isPrivateIp(r.address))) {
-    throw new Error("Target host is not allowed");
+    throw new SafeTargetError("Target host is not allowed");
   }
 }
 
@@ -165,6 +167,10 @@ const app = new Hono<AuthenticatedEnv>()
           url,
         });
       } catch (error) {
+        if (error instanceof SafeTargetError) {
+          return c.json({ error: error.message }, 400);
+        }
+
         return c.json({ error: (error as Error).message }, 500);
       }
     },
