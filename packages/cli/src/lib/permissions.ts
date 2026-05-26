@@ -73,15 +73,8 @@ export function isCommandAllowed(command: string): boolean {
       if (!remainder) {
         return true;
       }
-      const nextChar = remainder[0];
-      const nextTwo = remainder.slice(0, 2);
-      if (
-        nextTwo === "&&" ||
-        nextTwo === "||" ||
-        nextChar === "|" ||
-        nextChar === ";" ||
-        nextChar === "&"
-      ) {
+
+      if (/[;&|<>`$()]/.test(remainder)) {
         return false;
       }
       return true;

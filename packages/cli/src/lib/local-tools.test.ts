@@ -306,8 +306,8 @@ describe("local-tools tool functioning", () => {
     try {
       const fs = require("fs");
       fs.symlinkSync(outsideTarget, linkPath);
-    } catch {
-      return;
+    } catch (err) {
+      throw new Error(`Symlink setup failed for ${linkPath} -> ${outsideTarget}: ${err}`);
     }
 
     try {

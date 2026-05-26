@@ -158,7 +158,8 @@ export const toolInputSchemas = {
   }),
   gitLog: z.object({
     limit: z
-      .number()
+      .int()
+      .min(1)
       .optional()
       .default(10)
       .describe("Maximum number of commits to return (default 10)"),

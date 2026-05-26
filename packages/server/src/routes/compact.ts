@@ -223,24 +223,50 @@ Produce only this summary. Be extremely precise, technical, and complete. Do not
         };
       }
 
-      const updated = await db.session.update({
-        where: { id, userId },
-        data: {
-          messages: compactedMessages as any,
-        },
-      });
-      if (!updated) {
-        throw new Error("Failed to update session messages in database");
-      }
-
-      try {
-        await ingestAiUsage({
-          externalCustomerId: userId,
-          eventId: `compaction:${id}:${compactionId}`,
-          credits: billableUsage.credits,
+      const txResult = await db.$transaction(async (tx) => {
+        const sessionInside = await tx.session.findUnique({
+          where: { id, userId },
         });
-      } catch (ingestErr) {
-        console.error("Failed to ingest Polar AI usage for compaction:", ingestErr);
+        if (!sessionInside) {
+          throw new Error("Session not found");
+        }
+
+        const currentMessages = (sessionInside.messages as any[]) || [];
+        const alreadyDone = currentMessages.some((m) => m && m.id === compactionId);
+        if (alreadyDone) {
+          return { won: false, messages: currentMessages };
+        }
+
+        const updatedSession = await tx.session.update({
+          where: { id, userId },
+          data: {
+            messages: compactedMessages as any,
+          },
+        });
+        if (!updatedSession) {
+          throw new Error("Failed to update session messages in database");
+        }
+        return { won: true, session: updatedSession };
+      });
+
+      if (txResult.won) {
+        try {
+          await ingestAiUsage({
+            externalCustomerId: userId,
+            eventId: `compaction:${id}:${compactionId}`,
+            credits: billableUsage.credits,
+          });
+        } catch (ingestErr) {
+          console.error("Failed to ingest Polar AI usage for compaction:", ingestErr);
+        }
+      } else {
+        const dbMessagesAfterLost = txResult.messages || [];
+        const estimatedTokensAfterLost = 1500 + estimateTokensForMessages(dbMessagesAfterLost);
+        return c.json({
+          compactedMessages: dbMessagesAfterLost,
+          credits: 0,
+          estimatedTokens: estimatedTokensAfterLost,
+        });
       }
 
       return c.json({

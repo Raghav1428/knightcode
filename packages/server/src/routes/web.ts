@@ -52,15 +52,18 @@ function isPrivateIp(ip: string): boolean {
   );
 }
 
-async function assertSafeTarget(rawUrl: string) {
+async function assertSafeTarget(rawUrl: string): Promise<{ vettedIp: string; hostname: string }> {
   const u = new URL(rawUrl);
   if (!["http:", "https:"].includes(u.protocol)) {
     throw new SafeTargetError("Only http/https URLs are allowed");
   }
   const records = await dns.lookup(u.hostname, { all: true });
-  if (records.some((r) => isPrivateIp(r.address))) {
-    throw new SafeTargetError("Target host is not allowed");
+  const safeRecords = records.filter((r) => !isPrivateIp(r.address));
+  if (safeRecords.length === 0) {
+    throw new SafeTargetError("Target host resolves to no allowed public addresses");
   }
+  const vettedIp = safeRecords[0]!.address;
+  return { vettedIp, hostname: u.hostname };
 }
 
 const app = new Hono<AuthenticatedEnv>()
@@ -85,13 +88,19 @@ const app = new Hono<AuthenticatedEnv>()
     async (c) => {
       const { url, maxLength } = c.req.valid("json");
       try {
-        await assertSafeTarget(url);
-        const response = await fetch(url, {
+        const { vettedIp, hostname } = await assertSafeTarget(url);
+        const u = new URL(url);
+        const ipSegment = vettedIp.includes(":") ? `[${vettedIp}]` : vettedIp;
+        u.hostname = ipSegment;
+        const targetUrl = u.toString();
+
+        const response = await fetch(targetUrl, {
           redirect: "error",
           headers: {
             "User-Agent":
               "Mozilla/5.0 (compatible; KnightCode/1.0; +https://knightcode.dev)",
             Accept: "text/html, application/xhtml+xml, text/plain",
+            Host: hostname,
           },
           signal: AbortSignal.timeout(15000),
         });
