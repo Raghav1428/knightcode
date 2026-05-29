@@ -15,7 +15,7 @@ export function computeLineDiff(oldStr: string, newStr: string): DiffLine[] {
   const oldLines = splitLines(oldStr);
   const newLines = splitLines(newStr);
 
-  const maxCells = 200_000;
+  const maxCells = 2_000_000;
   if ((oldLines.length + 1) * (newLines.length + 1) > maxCells) {
     return [
       {

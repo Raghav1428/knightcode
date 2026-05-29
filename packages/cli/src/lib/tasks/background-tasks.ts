@@ -18,19 +18,22 @@ export function killProcessOnPort(port: number) {
       const res = spawnSync("netstat", ["-ano"], { encoding: "utf-8" });
       const output = res.stdout || "";
       const lines = output.trim().split("\n");
-      const targetSearch = `:${port}`;
       for (const line of lines) {
-        if (!line.includes(targetSearch)) continue;
         const parts = line.trim().split(/\s+/);
-        if (parts.length >= 2 && parts[parts.length - 2] === "LISTENING") {
-          const pid = parts[parts.length - 1];
-          if (
-            pid &&
-            /^\d+$/.test(pid) &&
-            pid !== "0" &&
-            pid !== String(process.pid)
-          ) {
-            spawnSync("taskkill", ["/F", "/PID", pid]);
+        if (parts.length >= 2) {
+          const localAddress = parts[1]; // e.g. "127.0.0.1:3000" or "[::1]:3000"
+          const portMatch = localAddress?.match(/:(\d+)$/);
+          const parsedPort = portMatch ? parseInt(portMatch[1]!, 10) : null;
+          if (parsedPort === port && parts[parts.length - 2] === "LISTENING") {
+            const pid = parts[parts.length - 1];
+            if (
+              pid &&
+              /^\d+$/.test(pid) &&
+              pid !== "0" &&
+              pid !== String(process.pid)
+            ) {
+              spawnSync("taskkill", ["/F", "/PID", pid]);
+            }
           }
         }
       }
@@ -131,8 +134,18 @@ export function monitorProcessesHeartbeat() {
     try {
       process.kill(pid, 0);
       isAlive = true;
-    } catch {
-      isAlive = false;
+    } catch (err: any) {
+      // Only ESRCH ("no such process") is a definitive "dead" signal on both
+      // POSIX and Windows. EPERM ("permission denied") means the process
+      // exists but is owned by another session — still alive from our POV.
+      // Any other unexpected error code is treated as "unknown" and we err
+      // on the side of keeping the registry entry so the next heartbeat can
+      // retry instead of orphaning a live process.
+      if (err?.code === "ESRCH") {
+        isAlive = false;
+      } else {
+        isAlive = true;
+      }
     }
 
     if (!isAlive) {
@@ -149,7 +162,10 @@ export function monitorProcessesHeartbeat() {
 
 export function cleanupAllProcesses() {
   const registry = loadRegistry();
-  for (const pidStr of Object.keys(registry)) {
+  const pidsToKill = Object.keys(registry);
+
+  // 1. Send SIGTERM / taskkill to all processes first to start graceful shutdown
+  for (const pidStr of pidsToKill) {
     const pid = parseInt(pidStr, 10);
     const pidStrClean = String(pid);
     if (!/^\d+$/.test(pidStrClean)) continue;
@@ -161,14 +177,37 @@ export function cleanupAllProcesses() {
         process.kill(pid, "SIGTERM");
       }
     } catch {}
-
-    try {
-      if (process.platform === "win32") {
-        spawnSync("taskkill", ["/F", "/PID", pidStrClean]);
-      } else {
-        process.kill(pid, "SIGKILL");
-      }
-    } catch {}
-    unregisterProcess(pid);
   }
+
+  // 2. Cross-platform synchronous sleep for 150ms to allow processes to handle SIGTERM
+  try {
+    spawnSync(process.execPath, ["-e", "setTimeout(() => {}, 150)"]);
+  } catch {}
+
+  // 3. Force-kill any remaining alive processes
+  for (const pidStr of pidsToKill) {
+    const pid = parseInt(pidStr, 10);
+    const pidStrClean = String(pid);
+    if (!/^\d+$/.test(pidStrClean)) continue;
+
+    let isAlive = false;
+    try {
+      process.kill(pid, 0);
+      isAlive = true;
+    } catch {}
+
+    if (isAlive) {
+      try {
+        if (process.platform === "win32") {
+          spawnSync("taskkill", ["/F", "/PID", pidStrClean]);
+        } else {
+          process.kill(pid, "SIGKILL");
+        }
+      } catch {}
+    }
+
+    activeProcesses.delete(pid);
+    delete registry[pidStr];
+  }
+  saveRegistry(registry);
 }

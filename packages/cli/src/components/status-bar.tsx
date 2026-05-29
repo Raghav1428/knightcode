@@ -29,7 +29,8 @@ type Props = {
 };
 
 export function StatusBar({ tokenStats }: Props) {
-  const { mode, model, reasoningEffort, worktreeDisabled } = usePromptConfig();
+  const { mode, model, reasoningEffort } =
+    usePromptConfig();
   const { colors } = useTheme();
 
   const modelDef = findSupportedChatModel(model);
@@ -111,14 +112,10 @@ export function StatusBar({ tokenStats }: Props) {
           )}
 
         {contextRemainingElement}
+
+
       </box>
 
-      <box flexDirection="row" gap={1} marginLeft="auto">
-        <text fg={colors.dimSeparator}>wt: </text>
-        <text fg={worktreeDisabled ? colors.planMode : colors.success}>
-          {worktreeDisabled ? "direct" : "isolated"}
-        </text>
-      </box>
     </box>
   );
 }

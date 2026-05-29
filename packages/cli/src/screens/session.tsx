@@ -1,7 +1,9 @@
 import { useState, useEffect, useMemo, useRef } from "react";
+import { TextAttributes } from "@opentui/core";
 import { useParams, useLocation, useNavigate } from "react-router";
 import { z } from "zod";
 import { useKeyboard } from "@opentui/react";
+import { copyToClipboard } from "../lib/clipboard";
 import {
   type ModeType,
   type SupportedChatModelId,
@@ -14,8 +16,10 @@ import {
   BotMessage,
   ErrorMessage,
   CompactionMessage,
+  InterruptedMessage,
 } from "../components/messages";
 import { useToast } from "../providers/toast";
+import { useTheme } from "../providers/theme";
 import { useChat } from "../hooks/use-chat";
 import { usePromptConfig } from "../providers/prompt-config";
 import type { Message } from "../hooks/use-chat";
@@ -42,6 +46,16 @@ const sessionLocationSchema = z.object({
     .optional(),
 });
 
+function CommandProgressMessage({ message }: { message: string }) {
+  const { colors } = useTheme();
+  return (
+    <box flexDirection="row" gap={1} paddingX={3} paddingY={1}>
+      <spinner name="dots14" color={colors.primary} />
+      <text attributes={TextAttributes.DIM}>{message}</text>
+    </box>
+  );
+}
+
 function ChatMessage({
   msg,
   pendingConfirmations,
@@ -55,6 +69,19 @@ function ChatMessage({
     .filter((p) => p.type === "text")
     .map((p) => p.text)
     .join("");
+
+  if (msg.metadata?.isInterrupted) {
+    return (
+      <InterruptedMessage
+        parts={msg.parts}
+        model={msg.metadata?.model ?? "unknown"}
+        mode={msg.metadata?.mode ?? "BUILD"}
+        durationMs={msg.metadata?.durationMs}
+        pendingConfirmations={pendingConfirmations}
+        answerQuestion={answerQuestion}
+      />
+    );
+  }
 
   if (msg.metadata?.isCompaction) {
     return (
@@ -70,6 +97,9 @@ function ChatMessage({
   }
 
   if (msg.role === "user") {
+    if (msg.metadata?.commandProgressMessage) {
+      return <CommandProgressMessage message={msg.metadata.commandProgressMessage} />;
+    }
     return <UserMessage message={text} mode={msg.metadata?.mode ?? "BUILD"} />;
   }
 
@@ -102,6 +132,8 @@ function SessionChat({
   );
   const { mode, model } = usePromptConfig();
   const { isTopLayer } = useKeyboardLayer();
+  const toast = useToast();
+
   const {
     messages,
     status,
@@ -113,6 +145,8 @@ function SessionChat({
     confirmToolCall,
     answerQuestion,
     compact,
+    clearMessages,
+    rewindMessages,
     isCompacting,
   } = useChat(session.id, initialMessages);
   const { setItems, clearAll, toggleExpanded } = useTodo();
@@ -217,6 +251,8 @@ function SessionChat({
       return;
     }
 
+
+
     if (pending && pending.toolCall.toolName !== "AskUserQuestion") {
       if (key.name === "y" || key.name === "Y") {
         key.preventDefault();
@@ -258,7 +294,12 @@ function SessionChat({
       }
       inputDisabled={pendingConfirmations.length > 0 || isCompacting}
       compact={compact}
+      clearMessages={clearMessages}
+      rewindMessages={rewindMessages}
+      messages={messages}
       tokenStats={tokenStats}
+      submitMessage={(text) => submit({ userText: text, mode, model })}
+      submitCommand={(text, progressMessage) => submit({ userText: text, mode, model, commandProgressMessage: progressMessage })}
     >
       {messages.map((msg) => (
         <ChatMessage

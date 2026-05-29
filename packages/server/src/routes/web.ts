@@ -22,6 +22,22 @@ class SafeTargetError extends Error {}
 
 function isPrivateIp(ip: string): boolean {
   const normalized = ip.toLowerCase();
+  if (normalized.startsWith("::ffff:")) {
+    const rest = normalized.slice(7);
+    if (net.isIPv4(rest)) {
+      return isPrivateIp(rest);
+    }
+    const hexParts = rest.split(":");
+    if (hexParts.length === 2) {
+      const high = parseInt(hexParts[0]!, 16);
+      const low = parseInt(hexParts[1]!, 16);
+      if (!isNaN(high) && !isNaN(low)) {
+        const ipv4 = `${(high >> 8) & 0xff}.${high & 0xff}.${(low >> 8) & 0xff}.${low & 0xff}`;
+        return isPrivateIp(ipv4);
+      }
+    }
+  }
+
   if (net.isIPv4(normalized)) {
     const parts = normalized.split(".").map((part) => Number(part));
     const [a, b] = parts;

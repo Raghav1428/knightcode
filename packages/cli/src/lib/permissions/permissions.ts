@@ -74,7 +74,7 @@ export function isCommandAllowed(command: string): boolean {
         return true;
       }
 
-      if (/[;&|<>`$()]/.test(remainder)) {
+      if (/[;&|<>`$()\r\n]/.test(remainder)) {
         return false;
       }
       return true;

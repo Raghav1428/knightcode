@@ -4,8 +4,9 @@ import prettyMs from "pretty-ms";
 import type { Message } from "../../hooks/use-chat";
 import { useTheme } from "../../providers/theme";
 import { EmptyBorder } from "../utils/border";
-import { computeLineDiff } from "../../lib/diff";
+import { computeLineDiff } from "../../lib/git/diff";
 import { InlineQuestion } from "./inline-question";
+import { renderMarkdownLines } from "../../lib/markdown/markdown-renderer";
 
 type ClientMessagePart = Message["parts"][number];
 type ToolPart = Extract<
@@ -84,6 +85,55 @@ function groupConsecutiveParts(parts: ClientMessagePart[]): PartGroup[] {
   return groups;
 }
 
+function MarkdownText({
+  text,
+  defaultFg = "white",
+  isThinking = false,
+}: {
+  text: string;
+  defaultFg?: string;
+  isThinking?: boolean;
+}) {
+  const { colors } = useTheme();
+  const lines = renderMarkdownLines(text);
+
+  function resolveFg(fg: string): string {
+    switch (fg) {
+      case "primary":   return colors.primary;
+      case "info":      return colors.info;
+      case "thinking":  return colors.thinking;
+      case "dim":       return colors.dimSeparator;
+      case "code":      return isThinking ? defaultFg : colors.info;
+      case "text":
+      default:          return defaultFg;
+    }
+  }
+
+  return (
+    <box flexDirection="column" width="100%" gap={0}>
+      {lines.map((line, idx) => {
+        let attributes = TextAttributes.NONE;
+        if (line.bold) attributes |= TextAttributes.BOLD;
+        if (line.dim) attributes |= TextAttributes.DIM;
+
+        if (isThinking && line.fg === "code") {
+          attributes |= TextAttributes.ITALIC | TextAttributes.DIM;
+        }
+
+        return (
+          <text
+            key={idx}
+            fg={resolveFg(line.fg)}
+            attributes={attributes === TextAttributes.NONE ? undefined : attributes}
+          >
+            {line.text || " "}
+          </text>
+        );
+      })}
+    </box>
+  );
+}
+
 export function BotMessage({
   parts,
   model,
@@ -111,10 +161,12 @@ export function BotMessage({
                   }}
                   width="100%"
                   paddingX={2}
+                  flexDirection="column"
                 >
                   <text attributes={TextAttributes.DIM}>
-                    <em fg={colors.thinking}>Thinking:</em> {part.text}
+                    <em fg={colors.thinking}>Thinking:</em>
                   </text>
+                  <MarkdownText text={part.text} defaultFg="gray" isThinking={true} />
                 </box>
               );
             }
@@ -309,7 +361,7 @@ export function BotMessage({
             if (part.type === "text") {
               return (
                 <box key={`text-${j}`} paddingX={3} width="100%">
-                  <text>{part.text}</text>
+                  <MarkdownText text={part.text} />
                 </box>
               );
             }

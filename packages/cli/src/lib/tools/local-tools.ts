@@ -1,13 +1,19 @@
 import { Mode, toolInputSchemas, type ModeType } from "@knightcode/shared";
-import fs, { existsSync, lstatSync, realpathSync } from "fs";
+import fs, { existsSync, lstatSync, realpathSync, readlinkSync } from "fs";
 import { mkdir, readFile, readdir, stat, writeFile, unlink, open } from "fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "path";
 import readline from "readline";
 import { spawnSync } from "child_process";
 import safeRegex from "safe-regex";
-import { apiClient } from "./api-client";
-import { killProcessOnPort, registerProcess } from "./background-tasks";
-import { getExecutionRoot } from "./worktree-tools";
+import { apiClient } from "../api-client";
+import { killProcessOnPort, registerProcess } from "../tasks/background-tasks";
+
+import {
+  runPreToolHooks,
+  runPostToolHooks,
+  runPostToolUseFailureHooks,
+} from "../hooks";
+import { detectShell } from "../shell";
 
 const sessionOriginalContents = new Map<string, Map<string, string | null>>();
 
@@ -61,7 +67,7 @@ export async function undoSessionChanges(sessionId: string): Promise<{
   if (!sessionContents) {
     return { revertedFiles, failedFiles };
   }
-  const cwd = getExecutionRoot(sessionId).root;
+  const cwd = process.cwd();
 
   for (const [resolvedPath, originalContent] of sessionContents.entries()) {
     try {
@@ -138,14 +144,13 @@ function resolveInsideRoot(root: string, path: string, isWrite = false) {
     let current = resolved;
     while (current && current.length >= root.length && current !== dirname(current)) {
       try {
-        if (existsSync(current)) {
-          const stats = lstatSync(current);
-          if (stats.isSymbolicLink()) {
-            const linkTarget = realpathSync(current);
-            const linkRel = relative(realRoot, linkTarget);
-            if (linkRel.startsWith("..") || isAbsolute(linkRel)) {
-              throw new Error("Parent symlink points outside the project directory");
-            }
+        const stats = lstatSync(current);
+        if (stats.isSymbolicLink()) {
+          const linkTarget = readlinkSync(current);
+          const resolvedTarget = resolve(dirname(current), linkTarget);
+          const linkRel = relative(realRoot, resolvedTarget);
+          if (linkRel.startsWith("..") || isAbsolute(linkRel)) {
+            throw new Error("Parent symlink points outside the project directory");
           }
         }
       } catch (err: any) {
@@ -190,11 +195,19 @@ function assertSafeCommand(command: string) {
   const forbiddenPatterns = [
     /\brm\s+(-[^\s]*r[^\s]*f|-rf|-fr)\b/,
     /\bgit\s+push\b.*\s--force(?:\s|$)/,
+    /\bgit\s+reset\s+--hard\b/,
+    /\bgit\s+clean\s+-[^\s]*f\b/,
     /\bdrop\s+table\b/,
+    /\btruncate\s+table\b/,
+    /\bdrop\s+database\b/,
     /^format\b/,
     /\bdeltree\b/,
     /\bdel\s+\/[^\s]*s[^\s]*q\b/,
     /\bremove-item\b.*\s-recurse\b.*\s-force\b/,
+    /\bchmod\s+777\b/,
+    /\bsudo\s+rm\b/,
+    /\bkill\s+-9\s+1\b/,
+    /:\s*\(\s*\)\s*\{.*\}\s*;\s*:/,
   ];
 
   if (forbiddenPatterns.some((pattern) => pattern.test(normalized))) {
@@ -208,14 +221,15 @@ function truncate(value: string, limit: number) {
     : value;
 }
 
-export async function executeLocalTool(
+
+async function executeLocalToolImpl(
   toolName: string,
   input: unknown,
   mode: ModeType,
   sessionId?: string,
 ) {
   const sId = sessionId ?? "default";
-  const executionRoot = getExecutionRoot(sId).root;
+  const executionRoot = process.cwd();
   if (
     mode === Mode.PLAN &&
     ![
@@ -230,6 +244,7 @@ export async function executeLocalTool(
       "gitStatus",
       "gitDiff",
       "gitLog",
+      "skill",
     ].includes(toolName)
   ) {
     throw new Error(`Tool ${toolName} is not available in PLAN mode`);
@@ -299,12 +314,17 @@ export async function executeLocalTool(
           lineCount++;
         }
 
+        // Distinguish "past EOF" from "empty file" so the caller doesn't
+        // confuse a paginated read that ran off the end with a genuinely
+        // empty file.
+        const pastEof = start >= lineCount && lineCount > 0;
         return {
           content: lines.join("\n"),
           totalLines: lineCount,
           offset: start,
           linesReturned: lines.length,
           truncated: start + count < lineCount,
+          pastEof,
         };
       }
 
@@ -429,93 +449,114 @@ export async function executeLocalTool(
       let truncated = false;
       const limit = Math.min(maxResults, MAX_MATCHES);
 
-      for (const absPath of filesToSearch) {
+      // Process files in parallel batches of size 30
+      const batchSize = 30;
+      for (let i = 0; i < filesToSearch.length; i += batchSize) {
         if (results.length >= limit) {
           truncated = true;
           break;
         }
 
-        let content: string;
-        try {
-          content = await readFile(absPath, "utf-8");
-          // Simple binary file check: contains null character
-          if (content.includes("\0")) continue;
-        } catch {
-          continue;
-        }
+        const batch = filesToSearch.slice(i, i + batchSize);
+        const batchResults = await Promise.all(
+          batch.map(async (absPath) => {
+            try {
+              const fStat = await stat(absPath);
+              if (fStat.size > 500_000) return null; // skip large files
 
-        const relativePath = relative(cwd, absPath);
+              const fd = await open(absPath, "r");
+              try {
+                const buffer = Buffer.alloc(1024);
+                const { bytesRead } = await fd.read(buffer, 0, 1024, 0);
+                const hasNull = buffer.subarray(0, bytesRead).includes(0);
+                if (hasNull) return null; // skip binary
+              } finally {
+                await fd.close();
+              }
 
-        if (outputMode === "files") {
-          regex.lastIndex = 0;
-          if (regex.test(content)) {
-            results.push({ file: relativePath });
-          }
-        } else if (outputMode === "count") {
-          const globalRegex = validateAndGetRegex(
-            pattern,
-            caseInsensitive ? "gi" : "g",
-          );
-          const matches = content.match(globalRegex);
-          if (matches && matches.length > 0) {
-            results.push({ file: relativePath, count: matches.length });
-          }
-        } else {
-          // Content mode
-          const lines = content.split("\n");
-          const matchIndices: number[] = [];
+              const content = await readFile(absPath, "utf-8");
+              const relativePath = relative(cwd, absPath);
+              const fileMatches: any[] = [];
 
-          for (let i = 0; i < lines.length; i++) {
-            const line = lines[i]!;
-            regex.lastIndex = 0;
-            if (regex.test(line)) {
-              matchIndices.push(i);
+              if (outputMode === "files") {
+                regex.lastIndex = 0;
+                if (regex.test(content)) {
+                  fileMatches.push({ file: relativePath });
+                }
+              } else if (outputMode === "count") {
+                const globalRegex = validateAndGetRegex(
+                  pattern,
+                  caseInsensitive ? "gi" : "g",
+                );
+                const matches = content.match(globalRegex);
+                if (matches && matches.length > 0) {
+                  fileMatches.push({ file: relativePath, count: matches.length });
+                }
+              } else {
+                const lines = content.split("\n");
+                const matchIndices: number[] = [];
+
+                for (let i = 0; i < lines.length; i++) {
+                  const line = lines[i]!;
+                  regex.lastIndex = 0;
+                  if (regex.test(line)) {
+                    matchIndices.push(i);
+                  }
+                }
+
+                if (matchIndices.length > 0) {
+                  if (contextLines === undefined || contextLines <= 0) {
+                    for (const idx of matchIndices) {
+                      fileMatches.push({
+                        file: relativePath,
+                        line: idx + 1,
+                        type: "match" as const,
+                        content: lines[idx]!,
+                      });
+                    }
+                  } else {
+                    const includedLines = new Set<number>();
+                    for (const idx of matchIndices) {
+                      const start = Math.max(0, idx - contextLines);
+                      const end = Math.min(lines.length - 1, idx + contextLines);
+                      for (let i = start; i <= end; i++) {
+                        includedLines.add(i);
+                      }
+                    }
+
+                    const sortedIncluded = Array.from(includedLines).sort((a, b) => a - b);
+                    for (const idx of sortedIncluded) {
+                      const isMatch = matchIndices.includes(idx);
+                      fileMatches.push({
+                        file: relativePath,
+                        line: idx + 1,
+                        type: isMatch ? ("match" as const) : ("context" as const),
+                        content: lines[idx]!,
+                      });
+                    }
+                  }
+                }
+              }
+              return fileMatches;
+            } catch {
+              return null;
             }
-          }
+          })
+        );
 
-          if (matchIndices.length === 0) continue;
-
-          // If no context lines are requested, just return match lines
-          if (contextLines === undefined || contextLines <= 0) {
-            for (const idx of matchIndices) {
+        for (const fileMatches of batchResults) {
+          if (fileMatches) {
+            for (const match of fileMatches) {
               if (results.length >= limit) {
                 truncated = true;
                 break;
               }
-              results.push({
-                file: relativePath,
-                line: idx + 1,
-                type: "match" as const,
-                content: lines[idx]!,
-              });
+              results.push(match);
             }
-          } else {
-            // With context lines - return unique lines in chronological order
-            const includedLines = new Set<number>();
-            for (const idx of matchIndices) {
-              const start = Math.max(0, idx - contextLines);
-              const end = Math.min(lines.length - 1, idx + contextLines);
-              for (let i = start; i <= end; i++) {
-                includedLines.add(i);
-              }
-            }
-
-            const sortedIncluded = Array.from(includedLines).sort(
-              (a, b) => a - b,
-            );
-            for (const idx of sortedIncluded) {
-              if (results.length >= limit) {
-                truncated = true;
-                break;
-              }
-              const isMatch = matchIndices.includes(idx);
-              results.push({
-                file: relativePath,
-                line: idx + 1,
-                type: isMatch ? ("match" as const) : ("context" as const),
-                content: lines[idx]!,
-              });
-            }
+          }
+          if (results.length >= limit) {
+            truncated = true;
+            break;
           }
         }
       }
@@ -574,17 +615,17 @@ export async function executeLocalTool(
       } = toolInputSchemas.bash.parse(input);
       assertSafeCommand(command);
 
-      const isWin = process.platform === "win32";
-      const shellArgs = isWin
-        ? ["powershell.exe", "-Command", command]
-        : ["bash", "-c", command];
+      // Shell is detected once per process (memoized): pwsh/powershell on Windows,
+      // $SHELL (bash/zsh) on Unix. The AI never picks the shell — it's transparent.
+      const shell = detectShell();
+      const spawnArgs = [shell.bin, ...shell.args, command];
 
       if (runInBackground) {
         if (port !== undefined) {
           killProcessOnPort(port);
         }
 
-        const proc = Bun.spawn(shellArgs, {
+        const proc = Bun.spawn(spawnArgs, {
           cwd: executionRoot,
           stdout: "ignore",
           stderr: "ignore",
@@ -596,11 +637,11 @@ export async function executeLocalTool(
         return {
           success: true,
           pid: proc.pid,
-          message: `Command started in the background. PID: ${proc.pid}`,
+          message: `Command started in the background (${shell.name}). PID: ${proc.pid}`,
         };
       }
 
-      const proc = Bun.spawn(shellArgs, {
+      const proc = Bun.spawn(spawnArgs, {
         cwd: executionRoot,
         stdout: "pipe",
         stderr: "pipe",
@@ -678,14 +719,83 @@ export async function executeLocalTool(
         exitCode: res.status,
       };
     }
+    case "skill": {
+      const { name, arguments: args } = toolInputSchemas.skill.parse(input);
+      const { loadSkill } = await import("../context/skills");
+      const skill = loadSkill(name, executionRoot);
+      if (!skill) {
+        return {
+          found: false,
+          error: `No skill named "${name}". Check the Available Skills index in the system prompt for the exact name.`,
+        };
+      }
+      if (skill.disableModelInvocation) {
+        return {
+          found: false,
+          error: `Skill "${name}" is user-only and cannot be invoked by the model.`,
+        };
+      }
+      let bodyText = skill.body;
+      if (skill.getDynamicBody) {
+        try {
+          bodyText = await skill.getDynamicBody(args ?? "", sId);
+        } catch (err) {
+          console.error(`Failed to resolve dynamic body for skill ${name}:`, err);
+        }
+      }
+      return {
+        found: true,
+        name: skill.name,
+        description: skill.description,
+        arguments: args ?? null,
+        instructions: bodyText,
+      };
+    }
     default:
       throw new Error(`Unknown tool: ${toolName}`);
   }
 }
 
+export async function executeLocalTool(
+  toolName: string,
+  input: unknown,
+  mode: ModeType,
+  sessionId?: string,
+) {
+  const sId = sessionId ?? "default";
+
+  // PreToolUse hooks — can block execution
+  const preResult = await runPreToolHooks(toolName, input, sId);
+  if (preResult.blocked) {
+    throw new Error(
+      preResult.reason
+        ? `Hook blocked tool ${toolName}: ${preResult.reason}`
+        : `Hook blocked tool ${toolName}`,
+    );
+  }
+
+  let output: unknown;
+  try {
+    output = await executeLocalToolImpl(toolName, input, mode, sessionId);
+  } catch (err) {
+    // PostToolUseFailure hooks — best-effort, don't rethrow
+    void runPostToolUseFailureHooks(
+      toolName,
+      input,
+      err instanceof Error ? err.message : String(err),
+      sId,
+    );
+    throw err;
+  }
+
+  // PostToolUse hooks — fire-and-forget so tool output is returned immediately
+  void runPostToolHooks(toolName, input, output, sId);
+  return output;
+}
+
 export function getSessionModifiedFiles(sessionId: string): string[] {
   const sessionContents = sessionOriginalContents.get(sessionId);
   if (!sessionContents) return [];
-  const cwd = getExecutionRoot(sessionId).root;
+  const cwd = process.cwd();
   return Array.from(sessionContents.keys()).map((p) => relative(cwd, p));
 }

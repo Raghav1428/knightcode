@@ -1,3 +1,4 @@
+import { markIntentionalExit } from "../lib/exit-guard";
 import { Mode } from "@knightcode/shared";
 import {
   ScrollBoxRenderable,
@@ -61,6 +62,8 @@ type MentionCandidate = {
   path: string;
   kind: "file" | "directory";
 };
+
+
 
 function isWithinCurrentDirectory(targetPath: string) {
   const relativePath = relative(CURRENT_DIRECTORY, targetPath);
@@ -326,11 +329,18 @@ function FileMentionMenu({
   );
 }
 
+import type { Message } from "../hooks/use-chat";
+
 type Props = {
   onSubmit: (text: string) => void;
   disabled?: boolean;
   isCompacting?: boolean;
   compact?: () => void | Promise<void>;
+  clearMessages?: () => Promise<void>;
+  rewindMessages?: (n: number) => Promise<void>;
+  submitMessage?: (text: string) => void;
+  submitCommand?: (text: string, progressMessage: string) => void;
+  messages?: Message[];
   tokenStats?: {
     inputTokens: number;
     outputTokens: number;
@@ -351,8 +361,14 @@ export function InputBar({
   disabled = false,
   isCompacting = false,
   compact,
+  clearMessages,
+  rewindMessages,
+  submitMessage,
+  submitCommand,
+  messages,
   tokenStats,
 }: Props) {
+
   const {
     mode,
     toggleMode,
@@ -362,6 +378,7 @@ export function InputBar({
     reasoningEffort,
     setReasoningEffort,
   } = usePromptConfig();
+
   const textareaRef = useRef<TextareaRenderable>(null);
   const onSubmitRef = useRef<() => void>(() => {});
   const renderer = useRenderer();
@@ -485,7 +502,7 @@ export function InputBar({
 
       if (command.action) {
         command.action({
-          exit: () => renderer.destroy(),
+          exit: () => { markIntentionalExit(); renderer.destroy(); },
           toast,
           dialog,
           navigate,
@@ -497,6 +514,12 @@ export function InputBar({
           setReasoningEffort,
           sessionId,
           compact,
+          clearMessages,
+          rewindMessages,
+          submitMessage,
+          submitCommand,
+          messages,
+          tokenStats,
         });
       } else {
         textarea.insertText(command.value + " ");
@@ -515,6 +538,12 @@ export function InputBar({
       setReasoningEffort,
       sessionId,
       compact,
+      clearMessages,
+      rewindMessages,
+      submitMessage,
+      submitCommand,
+      messages,
+      tokenStats,
     ],
   );
 
@@ -525,6 +554,8 @@ export function InputBar({
     },
     [resolveCommand, handleCommand],
   );
+
+
 
   // keep the file picker in sync with the current @mention token
   useEffect(() => {

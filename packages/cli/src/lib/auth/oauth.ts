@@ -1,5 +1,5 @@
+import { createHmac, timingSafeEqual } from "crypto";
 import open from "open";
-import { createHmac } from "crypto";
 import { saveAuth } from "./auth";
 
 const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
@@ -21,31 +21,28 @@ async function createPkceChallenge(verifier: string) {
   return toBase64Url(new Uint8Array(digest));
 }
 
-function encodeState(state: OAuthState) {
-  const encoded = toBase64Url(JSON.stringify(state));
-  const secret = process.env.JWT_SECRET!;
-  const signature = createHmac("sha256", secret)
-    .update(encoded)
-    .digest("base64url");
-  return `${encoded}.${signature}`;
+function getSecret(): string {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) throw new Error("JWT_SECRET not set");
+  return secret;
 }
 
-function decodeState(state: string) {
-  const [encoded, signature] = state.split(".");
-  if (!encoded || !signature) {
-    throw new Error("Invalid state format");
-  }
+function encodeState(state: OAuthState) {
+  const payload = toBase64Url(JSON.stringify(state));
+  const sig = createHmac("sha256", getSecret()).update(payload).digest();
+  return `${payload}.${toBase64Url(sig)}`;
+}
 
-  const secret = process.env.JWT_SECRET!;
-  const expectedSignature = createHmac("sha256", secret)
-    .update(encoded)
-    .digest("base64url");
-
-  if (signature !== expectedSignature) {
-    throw new Error("Invalid state signature");
-  }
-
-  return JSON.parse(Buffer.from(encoded, "base64url").toString()) as OAuthState;
+function decodeState(state: string): OAuthState {
+  const dot = state.lastIndexOf(".");
+  if (dot <= 0) throw new Error("Invalid state");
+  const payloadB64 = state.slice(0, dot);
+  const sigB64 = state.slice(dot + 1);
+  const expectedSig = createHmac("sha256", getSecret()).update(payloadB64).digest();
+  const providedSig = Buffer.from(sigB64, "base64url");
+  if (providedSig.length !== expectedSig.length) throw new Error("State signature mismatch");
+  if (!timingSafeEqual(providedSig, expectedSig)) throw new Error("State signature mismatch");
+  return JSON.parse(Buffer.from(payloadB64, "base64url").toString()) as OAuthState;
 }
 
 function getErrorMessage(error: unknown) {
